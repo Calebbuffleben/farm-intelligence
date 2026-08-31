@@ -42,7 +42,17 @@ def main() -> int:
     load_dotenv()
     settings = Settings.from_env()
     pipeline = MessagePipeline(settings)
-    client = redis.Redis.from_url(settings.redis_url, decode_responses=True)
+    # XREADGROUP BLOCK 5s. socket_timeout tem que ser maior — senão o
+    # redis-py trata poll vazio como TimeoutError e o container morre.
+    block_ms = 5000
+    client = redis.Redis.from_url(
+        settings.redis_url,
+        decode_responses=True,
+        socket_connect_timeout=5,
+        socket_timeout=15,
+        retry_on_timeout=True,
+        health_check_interval=30,
+    )
     try:
         client.xgroup_create(
             settings.work_stream, settings.consumer_group, id="0", mkstream=True
@@ -67,13 +77,16 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _stop)
 
     while _running:
-        entries = client.xreadgroup(
-            settings.consumer_group,
-            "worker-1",
-            {settings.work_stream: ">"},
-            count=10,
-            block=5000,
-        )
+        try:
+            entries = client.xreadgroup(
+                settings.consumer_group,
+                "worker-1",
+                {settings.work_stream: ">"},
+                count=10,
+                block=block_ms,
+            )
+        except redis.TimeoutError:
+            continue
         if not entries:
             continue
         for _stream, records in entries:
