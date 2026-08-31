@@ -1,0 +1,23 @@
+{
+  "producers": [
+    {
+      "id": "prod-1",
+      "name": "Marcos Silva",
+      "phones": ["+5566999990000"],
+      "farms": [
+        {
+          "id": "farm-1",
+          "name": "Fazenda Chapadão",
+          "region": "Sorriso-MT",
+          "crops": [{ "crop": "soja", "season": "2026/27" }]
+        },
+        {
+          "id": "farm-2",
+          "name": "Santa Luzia",
+          "region": "Sorriso-MT",
+          "crops": [{ "crop": "milho_safrinha", "season": "2026/27" }]
+        }
+      ]
+    }
+  ]
+}

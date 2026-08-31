@@ -1,0 +1,8 @@
+# Farm intelligence worker — batch STT + entity resolution + fact extraction
+# STT: Gemini (áudio inline). Ingestão no backend: HTTP interno
+# (x-internal-token) — gRPC descartado: sem streaming, volume batch.
+google-genai>=1.16.0
+pydantic>=2.7
+redis>=5.0
+python-dotenv>=1.0
+requests>=2.32
