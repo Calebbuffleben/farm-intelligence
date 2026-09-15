@@ -14,7 +14,7 @@ Regras de ouro (não relaxar sem rodar a validação da Fase 0):
 import json
 from typing import Any, Dict, List, Optional
 
-from .schema import FACT_SUBTYPES
+from .schema import FACT_SUBTYPES, NEXT_ACTION_KINDS
 
 SYSTEM_INSTRUCTION = """Você é um analista comercial sênior de uma revenda de insumos agrícolas no Brasil.
 Você lê conversas de WhatsApp entre um vendedor técnico (RTV) e um produtor rural e extrai
@@ -41,6 +41,23 @@ Sua tarefa:
 - Uma única mensagem pode gerar múltiplos fatos, inclusive para fazendas diferentes.
 - `headline` deve ser uma frase curta e acionável em português (ex.: "Pressão por 5% de
   desconto no biológico X para a soja do Chapadão").
+
+Além dos fatos, preencha `deal` — a SITUAÇÃO DO NEGÓCIO da conversa inteira (use toda a
+sessão e os resumos anteriores, não só a mensagem alvo). Você é o diretor comercial que
+resume para o dono e o mentor que orienta o RTV:
+- `stage`: SONDAGEM (pesquisando, pedindo preço), NEGOCIACAO (discutindo preço, prazo,
+  condição), FECHAMENTO (decisão iminente, pedido em vias de sair), POS_VENDA (entrega,
+  reclamação, assistência após a compra), SEM_NEGOCIO (relacionamento sem negócio aberto).
+- `context_summary`: o que motivou a conversa, em 1-2 frases executivas — não repita o
+  que o cliente disse, explique a situação.
+- `intent` e `urgency`: interesse real de compra e pressa (BAIXA/MEDIA/ALTA).
+- `pain_point`: a dor ou objeção oculta que impede a venda agora (null se não há).
+- `next_action`: a ação mais provável de conversão para o RTV, concreta e curta
+  (ex.: "Ofereça o prazo de safra e confirme a janela de entrega para sexta").
+  Se houver POLÍTICA COMERCIAL, respeite-a (não sugira desconto acima da alçada).
+- `next_action_kind`: um dos tipos permitidos. `blocker_subtype`: o gargalo principal no
+  mesmo vocabulário dos subtipos, ou null.
+- Se já existe um BRIEF ANTERIOR, refine-o com a nova mensagem em vez de recomeçar.
 - Responda APENAS com o JSON pedido, sem markdown."""
 
 
@@ -51,6 +68,8 @@ def build_user_prompt(
     target_index: Optional[int] = None,
     human_links: Optional[List[Dict[str, Any]]] = None,
     session_retrieve: Optional[List[Dict[str, Any]]] = None,
+    sales_policy: Optional[Dict[str, Any]] = None,
+    previous_brief: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Monta o prompt de usuário para uma sessão lógica.
 
@@ -85,6 +104,17 @@ def build_user_prompt(
     lines.append("## SUBTIPOS PERMITIDOS")
     lines.append(", ".join(FACT_SUBTYPES))
     lines.append("")
+    lines.append("## TIPOS DE PRÓXIMO PASSO PERMITIDOS")
+    lines.append(", ".join(NEXT_ACTION_KINDS))
+    lines.append("")
+    if sales_policy:
+        lines.append("## POLÍTICA COMERCIAL DA REVENDA (respeitar no next_action)")
+        lines.append(json.dumps(sales_policy, ensure_ascii=False, indent=2))
+        lines.append("")
+    if previous_brief:
+        lines.append("## BRIEF ANTERIOR DESTA CONVERSA (refinar, não recomeçar)")
+        lines.append(json.dumps(previous_brief, ensure_ascii=False, default=str, indent=2))
+        lines.append("")
     if human_links:
         lines.append("## VÍNCULOS CONFIRMADOS POR HUMANO (não contradizer)")
         lines.append(json.dumps(human_links, ensure_ascii=False, indent=2))
@@ -99,6 +129,6 @@ def build_user_prompt(
         lines.append("")
     lines.append(
         "Retorne o JSON no schema ExtractionResult "
-        "(session_summary, facts[], unknowns[])."
+        "(session_summary, facts[], unknowns[], deal)."
     )
     return "\n".join(lines)

@@ -31,6 +31,8 @@ class FactExtractor:
         target_index: Optional[int] = None,
         human_links: Optional[List[Dict[str, Any]]] = None,
         session_retrieve: Optional[List[Dict[str, Any]]] = None,
+        sales_policy: Optional[Dict[str, Any]] = None,
+        previous_brief: Optional[Dict[str, Any]] = None,
     ) -> ExtractionResult:
         if not self._client:
             return ExtractionResult(session_summary="", facts=[], unknowns=[])
@@ -41,6 +43,8 @@ class FactExtractor:
             target_index=target_index,
             human_links=human_links,
             session_retrieve=session_retrieve,
+            sales_policy=sales_policy,
+            previous_brief=previous_brief,
         )
         response = self._client.models.generate_content(
             model=self._model,

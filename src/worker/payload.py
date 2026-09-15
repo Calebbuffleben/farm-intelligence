@@ -6,9 +6,46 @@ Módulo puro (sem Gemini) para a regra: confiança < limiar não grava farm_id.
 import logging
 from typing import Any, Dict, List, Optional
 
-from ..extractor.schema import FACT_SUBTYPES, ExtractionResult
+from ..extractor.schema import (
+    FACT_SUBTYPES,
+    NEXT_ACTION_KINDS,
+    DealBriefOut,
+    ExtractionResult,
+)
 
 logger = logging.getLogger(__name__)
+
+DEAL_STAGES = {"SONDAGEM", "NEGOCIACAO", "FECHAMENTO", "POS_VENDA", "SEM_NEGOCIO"}
+DEAL_LEVELS = {"BAIXA", "MEDIA", "ALTA"}
+
+
+def to_deal_payload(deal: Optional[DealBriefOut]) -> Optional[Dict[str, Any]]:
+    """Saneia o bloco `deal`: vocabulário fechado cai no default, textos truncados.
+
+    Fail-open: sem deal (Gemini desligado ou omitiu) → None e o backend não toca
+    no DealBrief existente.
+    """
+    if deal is None:
+        return None
+    stage = deal.stage if deal.stage in DEAL_STAGES else "SEM_NEGOCIO"
+    kind = deal.next_action_kind if deal.next_action_kind in NEXT_ACTION_KINDS else "aguardar"
+    blocker = deal.blocker_subtype if deal.blocker_subtype in FACT_SUBTYPES else None
+    if deal.blocker_subtype and blocker is None:
+        logger.warning("blocker_subtype fora do vocabulário: %s", deal.blocker_subtype)
+    products = [p.strip()[:80] for p in deal.products if isinstance(p, str) and p.strip()]
+    return {
+        "stage": stage,
+        "stageConfidence": max(0.0, min(1.0, float(deal.stage_confidence))),
+        "contextSummary": (deal.context_summary or "").strip()[:600],
+        "intent": deal.intent if deal.intent in DEAL_LEVELS else "MEDIA",
+        "urgency": deal.urgency if deal.urgency in DEAL_LEVELS else "MEDIA",
+        "painPoint": deal.pain_point.strip()[:400] if deal.pain_point else None,
+        "nextAction": (deal.next_action or "").strip()[:400],
+        "nextActionKind": kind,
+        "nextActionDueHint": deal.next_action_due_hint[:80] if deal.next_action_due_hint else None,
+        "blockerSubtype": blocker,
+        "products": products[:10],
+    }
 
 
 def to_analysis_payload(
@@ -104,4 +141,7 @@ def to_analysis_payload(
         payload["transcript"] = transcript
     if coach_tone:
         payload["coachTone"] = coach_tone
+    deal = to_deal_payload(result.deal)
+    if deal and deal["contextSummary"] and deal["nextAction"]:
+        payload["deal"] = deal
     return payload

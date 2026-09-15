@@ -82,6 +82,8 @@ class MessagePipeline:
             target_index=target_index,
             human_links=ctx.get("humanLinks") or [],
             session_retrieve=ctx.get("previousSummaries") or [],
+            sales_policy=ctx.get("salesPolicy") or None,
+            previous_brief=ctx.get("previousBrief") or None,
         )
         payload = to_analysis_payload(
             ctx,

@@ -64,6 +64,57 @@ class UnknownSpan(BaseModel):
     candidates: List[UnknownCandidate] = Field(default_factory=list)
 
 
+DealStage = Literal["SONDAGEM", "NEGOCIACAO", "FECHAMENTO", "POS_VENDA", "SEM_NEGOCIO"]
+DealLevel = Literal["BAIXA", "MEDIA", "ALTA"]
+
+# Próximo passo em vocabulário fechado — o dashboard agrupa por isto.
+NEXT_ACTION_KINDS = [
+    "proposta",
+    "followup",
+    "logistica",
+    "ligar",
+    "escalar_gestor",
+    "aguardar",
+    "pos_venda",
+]
+
+
+class DealBriefOut(BaseModel):
+    """Situação do negócio da conversa inteira (não só da mensagem alvo).
+
+    Vira DealBrief (1 por Conversation) no backend. Resumo executivo em três
+    pilares + GPS da venda (estágio e próximo passo).
+    """
+
+    stage: DealStage = Field(description="Momento do cliente na compra")
+    stage_confidence: float = Field(ge=0.0, le=1.0, default=0.5)
+    context_summary: str = Field(
+        description="Contexto central: o que motivou a conversa (1-2 frases, PT-BR)"
+    )
+    intent: DealLevel = Field(description="Nível real de interesse de compra")
+    urgency: DealLevel = Field(description="Pressa do cliente")
+    pain_point: Optional[str] = Field(
+        default=None,
+        description="Dor / objeção oculta: o que impede a venda agora",
+    )
+    next_action: str = Field(
+        description="Próximo passo sugerido ao RTV, acionável, 1 frase"
+    )
+    next_action_kind: str = Field(
+        description=f"Um de: {', '.join(NEXT_ACTION_KINDS)}"
+    )
+    next_action_due_hint: Optional[str] = Field(
+        default=None, description='Prazo do próximo passo, ex.: "até sexta"'
+    )
+    blocker_subtype: Optional[str] = Field(
+        default=None,
+        description=f"Gargalo principal, um de: {', '.join(FACT_SUBTYPES)}; null se não há",
+    )
+    products: List[str] = Field(
+        default_factory=list, description="Produtos/insumos em jogo"
+    )
+
+
 class ExtractionResult(BaseModel):
     """Saída completa de uma rodada do extrator sobre uma sessão lógica."""
 
@@ -72,3 +123,6 @@ class ExtractionResult(BaseModel):
     )
     facts: List[ExtractedFact] = Field(default_factory=list)
     unknowns: List[UnknownSpan] = Field(default_factory=list)
+    deal: Optional[DealBriefOut] = Field(
+        default=None, description="Situação do negócio da conversa"
+    )

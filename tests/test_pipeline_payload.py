@@ -5,7 +5,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.extractor.schema import ExtractedFact, ExtractionResult, UnknownSpan
+from src.extractor.schema import (
+    DealBriefOut,
+    ExtractedFact,
+    ExtractionResult,
+    UnknownSpan,
+)
 from src.worker.payload import to_analysis_payload
 
 CTX = {
@@ -113,10 +118,67 @@ def test_coach_omitted_when_absent():
     assert "coachTone" not in payload
 
 
+def test_valid_deal_passes_through():
+    result = ExtractionResult(
+        session_summary="ok",
+        facts=[],
+        deal=DealBriefOut(
+            stage="NEGOCIACAO",
+            stage_confidence=0.8,
+            context_summary="Produtor quer fechar o defensivo X antes do plantio.",
+            intent="ALTA",
+            urgency="ALTA",
+            pain_point="Concorrente parcelou em mais vezes.",
+            next_action="Ofereça prazo de safra e confirme entrega para sexta.",
+            next_action_kind="proposta",
+            blocker_subtype="preco",
+            products=["Defensivo X"],
+        ),
+    )
+    payload = to_analysis_payload(CTX, result, None, 0.7)
+    deal = payload["deal"]
+    assert deal["stage"] == "NEGOCIACAO"
+    assert deal["intent"] == "ALTA"
+    assert deal["nextActionKind"] == "proposta"
+    assert deal["blockerSubtype"] == "preco"
+    assert deal["products"] == ["Defensivo X"]
+
+
+def test_deal_out_of_vocabulary_falls_to_defaults():
+    # Pydantic valida `stage` como Literal; o saneamento cobre kind/blocker.
+    result = ExtractionResult(
+        session_summary="ok",
+        facts=[],
+        deal=DealBriefOut(
+            stage="SONDAGEM",
+            context_summary="Pediu preço.",
+            intent="MEDIA",
+            urgency="BAIXA",
+            next_action="Mandar tabela.",
+            next_action_kind="mandar_tabela_inventado",
+            blocker_subtype="subtipo_inventado",
+        ),
+    )
+    payload = to_analysis_payload(CTX, result, None, 0.7)
+    deal = payload["deal"]
+    assert deal["nextActionKind"] == "aguardar"
+    assert deal["blockerSubtype"] is None
+    assert deal["painPoint"] is None
+
+
+def test_deal_omitted_when_absent():
+    result = ExtractionResult(session_summary="ok", facts=[])
+    payload = to_analysis_payload(CTX, result, None, 0.7)
+    assert "deal" not in payload
+
+
 if __name__ == "__main__":
     test_low_confidence_farm_is_unknown_not_fact_link()
     test_high_confidence_keeps_farm_and_crop_season()
     test_invented_farm_id_is_dropped()
     test_coach_fields_pass_through()
     test_coach_omitted_when_absent()
+    test_valid_deal_passes_through()
+    test_deal_out_of_vocabulary_falls_to_defaults()
+    test_deal_omitted_when_absent()
     print("pipeline payload ok")
