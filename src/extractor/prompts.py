@@ -50,14 +50,48 @@ resume para o dono e o mentor que orienta o RTV:
   reclamação, assistência após a compra), SEM_NEGOCIO (relacionamento sem negócio aberto).
 - `context_summary`: o que motivou a conversa, em 1-2 frases executivas — não repita o
   que o cliente disse, explique a situação.
+- `producer_position`: diga objetivamente o que o produtor quer, aceitou, recusou ou
+  ainda precisa decidir. Não atribua intenção que não esteja sustentada pela conversa.
+- `deal_change`: descreva a novidade desta rodada em relação ao BRIEF ANTERIOR; null
+  quando for o primeiro brief ou nada tiver mudado.
 - `intent` e `urgency`: interesse real de compra e pressa (BAIXA/MEDIA/ALTA).
 - `pain_point`: a dor ou objeção oculta que impede a venda agora (null se não há).
-- `next_action`: a ação mais provável de conversão para o RTV, concreta e curta
-  (ex.: "Ofereça o prazo de safra e confirme a janela de entrega para sexta").
+- `next_action`: a ação mais provável de conversão, concreta e curta. Deve conter verbo,
+  objeto específico e, quando houver base, prazo (ex.: "Envie a condição de prazo de safra
+  do defensivo X hoje e confirme a janela de entrega para sexta").
+- `next_action_reason`: explique em uma frase por que essa ação destrava o negócio.
+- `next_action_owner`: RTV normalmente; MANAGER quando depender de alçada ou decisão gerencial.
+- `next_action_due_hint`: preserve o prazo dito ou inferido com segurança. Preencha
+  `next_action_due_at` em ISO-8601 apenas quando a data for inequívoca com base nos timestamps.
+- `suggested_reply`: escreva uma resposta curta, pronta para o RTV editar e enviar, sem
+  prometer condição, estoque, prazo ou desconto não presentes no contexto.
+- `manager_guidance`: informe a decisão/ajuda que o gerente precisa dar e por quê; null
+  quando não houver intervenção gerencial.
   Se houver POLÍTICA COMERCIAL, respeite-a (não sugira desconto acima da alçada).
 - `next_action_kind`: um dos tipos permitidos. `blocker_subtype`: o gargalo principal no
   mesmo vocabulário dos subtipos, ou null.
+- `analysis_quality`: COMPLETE para brief fundamentado. Não use PARTIAL ou STALE; estes
+  estados são reservados ao fail-open do sistema.
 - Se já existe um BRIEF ANTERIOR, refine-o com a nova mensagem em vez de recomeçar.
+
+CRITÉRIOS DE QUALIDADE:
+- Nunca escreva “releia a conversa”, “entre em contato”, “confirme o próximo passo” ou
+  “aguarde” sem dizer exatamente o quê, por quê, até quando e qual é o gatilho seguinte.
+- `aguardar` só é válido se o produtor pediu tempo ou há dependência externa explícita.
+  Nesse caso, a ação deve dizer o evento esperado, o limite e o que fazer sem retorno.
+- Não invente preço, percentual, estoque, entrega, produto, fazenda ou compromisso.
+- Diferencie fato do produtor, interpretação comercial e recomendação.
+
+EXEMPLO RUIM:
+context_summary="Mensagem recebida"; next_action="Releia e confirme o próximo passo";
+next_action_kind="aguardar".
+
+EXEMPLO BOM:
+context_summary="O produtor comparou o biológico X com a marca Y e condicionou a compra
+ao prazo de safra."; producer_position="Tem interesse no X, mas ainda não aceitou a
+condição de pagamento."; next_action="Envie hoje a condição permitida para o X e confirme
+se ela resolve a objeção de prazo."; next_action_reason="A condição de pagamento é a
+barreira declarada para a decisão."; next_action_owner="RTV".
 - Responda APENAS com o JSON pedido, sem markdown."""
 
 
@@ -70,6 +104,7 @@ def build_user_prompt(
     session_retrieve: Optional[List[Dict[str, Any]]] = None,
     sales_policy: Optional[Dict[str, Any]] = None,
     previous_brief: Optional[Dict[str, Any]] = None,
+    repair_feedback: Optional[List[str]] = None,
 ) -> str:
     """Monta o prompt de usuário para uma sessão lógica.
 
@@ -118,6 +153,14 @@ def build_user_prompt(
     if human_links:
         lines.append("## VÍNCULOS CONFIRMADOS POR HUMANO (não contradizer)")
         lines.append(json.dumps(human_links, ensure_ascii=False, indent=2))
+        lines.append("")
+    if repair_feedback:
+        lines.append("## CORREÇÃO OBRIGATÓRIA DA TENTATIVA ANTERIOR")
+        lines.append(
+            "A saída anterior foi rejeitada pelos motivos: "
+            + "; ".join(repair_feedback)
+            + ". Gere novamente todo o JSON, corrigindo esses pontos sem inventar dados."
+        )
         lines.append("")
     if target_index is not None:
         lines.append(

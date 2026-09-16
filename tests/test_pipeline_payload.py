@@ -1,5 +1,6 @@
 """Regra de ouro: confiança abaixo do limiar não vira farm_id no fato."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from src.extractor.schema import (
     ExtractionResult,
     UnknownSpan,
 )
-from src.worker.payload import to_analysis_payload
+from src.worker.payload import deal_quality_issues, resolve_due_at, to_analysis_payload
 
 CTX = {
     "farms": [
@@ -126,10 +127,13 @@ def test_valid_deal_passes_through():
             stage="NEGOCIACAO",
             stage_confidence=0.8,
             context_summary="Produtor quer fechar o defensivo X antes do plantio.",
+            producer_position="Quer comprar o defensivo X se o prazo atender a safra.",
             intent="ALTA",
             urgency="ALTA",
             pain_point="Concorrente parcelou em mais vezes.",
             next_action="Ofereça prazo de safra e confirme entrega para sexta.",
+            next_action_reason="Prazo e entrega são as condições declaradas para fechar.",
+            next_action_owner="RTV",
             next_action_kind="proposta",
             blocker_subtype="preco",
             products=["Defensivo X"],
@@ -151,21 +155,21 @@ def test_deal_out_of_vocabulary_falls_to_defaults():
         deal=DealBriefOut(
             stage="negociacao",
             context_summary="Pediu preço.",
+            producer_position="Está comparando o preço antes de decidir.",
             intent="media",
             urgency="baixa",
             next_action="Mandar tabela.",
+            next_action_reason="O preço foi solicitado pelo produtor.",
+            next_action_owner="RTV",
             next_action_kind="mandar_tabela_inventado",
             blocker_subtype="subtipo_inventado",
         ),
     )
     payload = to_analysis_payload(CTX, result, None, 0.7)
     deal = payload["deal"]
-    assert deal["stage"] == "SEM_NEGOCIO"
-    assert deal["intent"] == "MEDIA"
-    assert deal["urgency"] == "MEDIA"
-    assert deal["nextActionKind"] == "aguardar"
-    assert deal["blockerSubtype"] is None
-    assert deal["painPoint"] is None
+    assert deal["analysisQuality"] == "PARTIAL"
+    assert deal["nextActionKind"] == "followup"
+    assert "Pediu preço" not in deal["nextAction"]
 
 
 def test_deal_fallback_when_absent():
@@ -174,7 +178,100 @@ def test_deal_fallback_when_absent():
     deal = payload["deal"]
     assert deal["stage"] == "SONDAGEM"
     assert "Chapadão" in deal["contextSummary"]
-    assert deal["nextActionKind"] == "aguardar"
+    assert deal["nextActionKind"] == "followup"
+    assert deal["analysisQuality"] == "PARTIAL"
+    assert "Releia a conversa" not in deal["nextAction"]
+
+
+def test_text_body_is_used_by_contextual_fallback():
+    result = ExtractionResult(session_summary="", facts=[])
+    payload = to_analysis_payload(
+        CTX,
+        result,
+        None,
+        0.7,
+        source_text="Preciso do herbicida X para a soja do Chapadão.",
+    )
+    assert "herbicida X" in payload["deal"]["producerPosition"]
+    assert "última mensagem" in payload["deal"]["nextAction"]
+
+
+def test_previous_brief_is_preserved_as_stale():
+    previous = {
+        "stage": "NEGOCIACAO",
+        "stageConfidence": 0.9,
+        "contextSummary": "Negocia o produto X.",
+        "producerPosition": "Aceita o produto; discute prazo.",
+        "intent": "ALTA",
+        "urgency": "MEDIA",
+        "painPoint": "Prazo curto.",
+        "nextAction": "Enviar a condição aprovada para o produto X.",
+        "nextActionReason": "O prazo é a única objeção aberta.",
+        "nextActionOwner": "RTV",
+        "nextActionKind": "proposta",
+        "products": ["Produto X"],
+    }
+    ctx = {**CTX, "previousBrief": previous}
+    payload = to_analysis_payload(ctx, ExtractionResult(session_summary=""), None, 0.7)
+    assert payload["deal"]["stage"] == "NEGOCIACAO"
+    assert payload["deal"]["nextAction"] == previous["nextAction"]
+    assert payload["deal"]["analysisQuality"] == "STALE"
+
+
+def test_relative_deadline_is_resolved_from_message_timestamp():
+    due = resolve_due_at("até amanhã", "2026-09-16T12:00:00Z")
+    assert due is not None
+    assert due.startswith("2026-09-17T18:00:00")
+
+
+def test_generic_wait_is_rejected():
+    deal = DealBriefOut(
+        stage="SONDAGEM",
+        context_summary="Mensagem recebida.",
+        producer_position="Ainda não decidiu.",
+        intent="MEDIA",
+        urgency="MEDIA",
+        next_action="Aguarde o produtor.",
+        next_action_reason="É preciso esperar.",
+        next_action_owner="RTV",
+        next_action_kind="aguardar",
+    )
+    issues = deal_quality_issues(deal)
+    assert "texto operacional genérico" in issues
+    assert "aguardar sem prazo e gatilho de saída" in issues
+
+
+def test_discount_above_authority_requires_manager():
+    deal = DealBriefOut(
+        stage="NEGOCIACAO",
+        context_summary="Produtor condicionou a compra ao desconto.",
+        producer_position="Pediu 8% para fechar o produto X.",
+        intent="ALTA",
+        urgency="ALTA",
+        next_action="Ofereça 8% no produto X para fechar hoje.",
+        next_action_reason="O desconto é a condição declarada.",
+        next_action_owner="RTV",
+        next_action_kind="proposta",
+    )
+    issues = deal_quality_issues(deal, {"discountAuthorityPct": 5})
+    assert "desconto acima da alçada sem escalada ao gerente" in issues
+
+
+def test_actionable_conversation_fixture_covers_quality_gate_scenarios():
+    fixture_path = Path(__file__).parent / "fixtures" / "actionable_deals.json"
+    scenarios = json.loads(fixture_path.read_text(encoding="utf-8"))
+    names = {item["scenario"] for item in scenarios}
+    assert names == {
+        "preco",
+        "logistica",
+        "concorrente",
+        "fechamento",
+        "pos_venda",
+        "aguardar_com_gatilho",
+    }
+    for item in scenarios:
+        assert item["messages"]
+        assert item["expected"]["mustMention"]
 
 
 if __name__ == "__main__":
@@ -186,4 +283,10 @@ if __name__ == "__main__":
     test_valid_deal_passes_through()
     test_deal_out_of_vocabulary_falls_to_defaults()
     test_deal_fallback_when_absent()
+    test_text_body_is_used_by_contextual_fallback()
+    test_previous_brief_is_preserved_as_stale()
+    test_relative_deadline_is_resolved_from_message_timestamp()
+    test_generic_wait_is_rejected()
+    test_discount_above_authority_requires_manager()
+    test_actionable_conversation_fixture_covers_quality_gate_scenarios()
     print("pipeline payload ok")

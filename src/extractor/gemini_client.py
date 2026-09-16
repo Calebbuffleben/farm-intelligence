@@ -33,6 +33,7 @@ class FactExtractor:
         session_retrieve: Optional[List[Dict[str, Any]]] = None,
         sales_policy: Optional[Dict[str, Any]] = None,
         previous_brief: Optional[Dict[str, Any]] = None,
+        repair_feedback: Optional[List[str]] = None,
     ) -> ExtractionResult:
         if not self._client:
             return ExtractionResult(session_summary="", facts=[], unknowns=[])
@@ -45,6 +46,7 @@ class FactExtractor:
             session_retrieve=session_retrieve,
             sales_policy=sales_policy,
             previous_brief=previous_brief,
+            repair_feedback=repair_feedback,
         )
         try:
             response = self._client.models.generate_content(

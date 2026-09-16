@@ -44,6 +44,10 @@ class ExtractedFact(BaseModel):
     due_hint_text: Optional[str] = Field(
         default=None, description='Pista de prazo, ex.: "amanhã à tarde", "depois da chuva"'
     )
+    due_at: Optional[str] = Field(
+        default=None,
+        description="Prazo ISO-8601 apenas quando puder ser resolvido com segurança",
+    )
     evidence_message_index: int = Field(
         description="Índice da mensagem que evidencia o fato"
     )
@@ -66,6 +70,8 @@ class UnknownSpan(BaseModel):
 
 DealStage = Literal["SONDAGEM", "NEGOCIACAO", "FECHAMENTO", "POS_VENDA", "SEM_NEGOCIO"]
 DealLevel = Literal["BAIXA", "MEDIA", "ALTA"]
+NextActionOwner = Literal["RTV", "MANAGER"]
+AnalysisQuality = Literal["COMPLETE", "PARTIAL", "STALE"]
 
 # Próximo passo em vocabulário fechado — o dashboard agrupa por isto.
 NEXT_ACTION_KINDS = [
@@ -93,6 +99,12 @@ class DealBriefOut(BaseModel):
     context_summary: str = Field(
         description="Contexto central: o que motivou a conversa (1-2 frases, PT-BR)"
     )
+    producer_position: str = Field(
+        description="O que o produtor quer, aceitou, recusou ou ainda precisa decidir"
+    )
+    deal_change: Optional[str] = Field(
+        default=None, description="O que mudou desde o brief anterior; null na primeira análise"
+    )
     intent: str = Field(description="BAIXA | MEDIA | ALTA")
     urgency: str = Field(description="BAIXA | MEDIA | ALTA")
     pain_point: Optional[str] = Field(
@@ -102,11 +114,30 @@ class DealBriefOut(BaseModel):
     next_action: str = Field(
         description="Próximo passo sugerido ao RTV, acionável, 1 frase"
     )
+    next_action_reason: str = Field(
+        description="Por que esta ação aumenta a chance de avanço"
+    )
+    next_action_owner: str = Field(description="RTV | MANAGER", default="RTV")
     next_action_kind: str = Field(
         description=f"Um de: {', '.join(NEXT_ACTION_KINDS)}"
     )
     next_action_due_hint: Optional[str] = Field(
         default=None, description='Prazo do próximo passo, ex.: "até sexta"'
+    )
+    next_action_due_at: Optional[str] = Field(
+        default=None,
+        description="Prazo ISO-8601 apenas quando puder ser resolvido com segurança",
+    )
+    suggested_reply: Optional[str] = Field(
+        default=None,
+        description="Resposta curta e editável para o RTV; nunca é enviada automaticamente",
+    )
+    manager_guidance: Optional[str] = Field(
+        default=None,
+        description="Decisão ou ajuda gerencial necessária; null se não houver intervenção",
+    )
+    analysis_quality: str = Field(
+        default="COMPLETE", description="COMPLETE | PARTIAL | STALE"
     )
     blocker_subtype: Optional[str] = Field(
         default=None,

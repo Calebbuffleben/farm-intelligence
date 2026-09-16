@@ -18,7 +18,7 @@ from ..extractor.coach import CopilotCoach
 from ..extractor.gemini_client import FactExtractor
 from ..extractor.schema import ExtractionResult
 from ..stt.gemini_stt import GeminiStt
-from .payload import to_analysis_payload
+from .payload import deal_quality_issues, to_analysis_payload
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,26 @@ class MessagePipeline:
                 sales_policy=ctx.get("salesPolicy") or None,
                 previous_brief=ctx.get("previousBrief") or None,
             )
+            quality_issues = deal_quality_issues(
+                result.deal, ctx.get("salesPolicy") or None
+            )
+            if quality_issues:
+                logger.warning(
+                    "deal rejeitado message=%s issues=%s — tentando reparação",
+                    message_id,
+                    ", ".join(quality_issues),
+                )
+                result = self._extractor.extract(
+                    carteira,
+                    summaries,
+                    messages,
+                    target_index=target_index,
+                    human_links=ctx.get("humanLinks") or [],
+                    session_retrieve=ctx.get("previousSummaries") or [],
+                    sales_policy=ctx.get("salesPolicy") or None,
+                    previous_brief=ctx.get("previousBrief") or None,
+                    repair_feedback=quality_issues,
+                )
         except Exception:
             logger.exception(
                 "extração falhou message=%s — grava Card de Bordo mínimo",
@@ -100,6 +120,8 @@ class MessagePipeline:
             self._settings.resolver_min_confidence,
             coach_note=coach_note,
             coach_tone=coach_tone,
+            source_text=text,
+            source_sent_at=str(message.get("sentAt") or ""),
         )
         self._backend.post_analysis(message_id, payload)
         logger.info(
