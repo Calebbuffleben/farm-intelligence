@@ -168,10 +168,13 @@ def test_deal_out_of_vocabulary_falls_to_defaults():
     assert deal["painPoint"] is None
 
 
-def test_deal_omitted_when_absent():
+def test_deal_fallback_when_absent():
     result = ExtractionResult(session_summary="ok", facts=[])
-    payload = to_analysis_payload(CTX, result, None, 0.7)
-    assert "deal" not in payload
+    payload = to_analysis_payload(CTX, result, "Pediu herbicida do Chapadão.", 0.7)
+    deal = payload["deal"]
+    assert deal["stage"] == "SONDAGEM"
+    assert "Chapadão" in deal["contextSummary"]
+    assert deal["nextActionKind"] == "aguardar"
 
 
 if __name__ == "__main__":
@@ -182,5 +185,5 @@ if __name__ == "__main__":
     test_coach_omitted_when_absent()
     test_valid_deal_passes_through()
     test_deal_out_of_vocabulary_falls_to_defaults()
-    test_deal_omitted_when_absent()
+    test_deal_fallback_when_absent()
     print("pipeline payload ok")

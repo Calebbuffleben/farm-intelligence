@@ -48,7 +48,7 @@ def _handle_records(client, settings: Settings, pipeline: MessagePipeline, recor
                 logger.warning("registro sem messageId: %s", fields)
                 client.xack(settings.work_stream, settings.consumer_group, record_id)
                 continue
-            logger.info("processando message=%s redis_id=%s", message_id, record_id)
+            logger.info("processando message=%s redis_id=%s keys=%s", message_id, record_id, sorted(fields.keys()) if isinstance(fields, dict) else type(fields).__name__)
             pipeline.process(message_id)
             client.xack(settings.work_stream, settings.consumer_group, record_id)
             logger.info("ack message=%s", message_id)
@@ -67,7 +67,7 @@ def main() -> int:
         settings.redis_url,
         decode_responses=True,
         socket_connect_timeout=5,
-        socket_timeout=15,
+        socket_timeout=90,
         retry_on_timeout=True,
         health_check_interval=30,
     )

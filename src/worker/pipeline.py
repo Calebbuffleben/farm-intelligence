@@ -16,6 +16,7 @@ from ..backend.client import BackendClient
 from ..config.settings import Settings
 from ..extractor.coach import CopilotCoach
 from ..extractor.gemini_client import FactExtractor
+from ..extractor.schema import ExtractionResult
 from ..stt.gemini_stt import GeminiStt
 from .payload import to_analysis_payload
 
@@ -75,16 +76,23 @@ class MessagePipeline:
             s["summary"] for s in ctx.get("previousSummaries", []) if s.get("summary")
         ]
 
-        result = self._extractor.extract(
-            carteira,
-            summaries,
-            messages,
-            target_index=target_index,
-            human_links=ctx.get("humanLinks") or [],
-            session_retrieve=ctx.get("previousSummaries") or [],
-            sales_policy=ctx.get("salesPolicy") or None,
-            previous_brief=ctx.get("previousBrief") or None,
-        )
+        try:
+            result = self._extractor.extract(
+                carteira,
+                summaries,
+                messages,
+                target_index=target_index,
+                human_links=ctx.get("humanLinks") or [],
+                session_retrieve=ctx.get("previousSummaries") or [],
+                sales_policy=ctx.get("salesPolicy") or None,
+                previous_brief=ctx.get("previousBrief") or None,
+            )
+        except Exception:
+            logger.exception(
+                "extração falhou message=%s — grava Card de Bordo mínimo",
+                message_id,
+            )
+            result = ExtractionResult(session_summary="", facts=[], unknowns=[])
         payload = to_analysis_payload(
             ctx,
             result,

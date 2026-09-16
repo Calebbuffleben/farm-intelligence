@@ -19,11 +19,29 @@ DEAL_STAGES = {"SONDAGEM", "NEGOCIACAO", "FECHAMENTO", "POS_VENDA", "SEM_NEGOCIO
 DEAL_LEVELS = {"BAIXA", "MEDIA", "ALTA"}
 
 
+def fallback_deal(text: str = "") -> Dict[str, Any]:
+    """Card de Bordo mínimo — a UI não pode ficar presa em 'pending' sem DealBrief."""
+    snippet = " ".join((text or "").split())[:180]
+    return {
+        "stage": "SONDAGEM",
+        "stageConfidence": 0.3,
+        "contextSummary": snippet
+        or "Mensagem do produtor recebida; a extração automática não fechou o brief.",
+        "intent": "MEDIA",
+        "urgency": "MEDIA",
+        "painPoint": None,
+        "nextAction": "Releia a conversa e confirme o próximo passo com o produtor.",
+        "nextActionKind": "aguardar",
+        "nextActionDueHint": None,
+        "blockerSubtype": None,
+        "products": [],
+    }
+
+
 def to_deal_payload(deal: Optional[DealBriefOut]) -> Optional[Dict[str, Any]]:
     """Saneia o bloco `deal`: vocabulário fechado cai no default, textos truncados.
 
-    Fail-open: sem deal (Gemini desligado ou omitiu) → None e o backend não toca
-    no DealBrief existente.
+    Sem deal do Gemini → None; o caller grava fallback_deal para o Card aparecer.
     """
     if deal is None:
         return None
@@ -33,14 +51,18 @@ def to_deal_payload(deal: Optional[DealBriefOut]) -> Optional[Dict[str, Any]]:
     if deal.blocker_subtype and blocker is None:
         logger.warning("blocker_subtype fora do vocabulário: %s", deal.blocker_subtype)
     products = [p.strip()[:80] for p in deal.products if isinstance(p, str) and p.strip()]
+    context = (deal.context_summary or "").strip()[:600]
+    action = (deal.next_action or "").strip()[:400]
+    if not context or not action:
+        return None
     return {
         "stage": stage,
         "stageConfidence": max(0.0, min(1.0, float(deal.stage_confidence))),
-        "contextSummary": (deal.context_summary or "").strip()[:600],
+        "contextSummary": context,
         "intent": deal.intent if deal.intent in DEAL_LEVELS else "MEDIA",
         "urgency": deal.urgency if deal.urgency in DEAL_LEVELS else "MEDIA",
         "painPoint": deal.pain_point.strip()[:400] if deal.pain_point else None,
-        "nextAction": (deal.next_action or "").strip()[:400],
+        "nextAction": action,
         "nextActionKind": kind,
         "nextActionDueHint": deal.next_action_due_hint[:80] if deal.next_action_due_hint else None,
         "blockerSubtype": blocker,
@@ -91,12 +113,15 @@ def to_analysis_payload(
         if farm_id:
             current = links.get(farm_id)
             if current is None or fact.confidence > current["confidence"]:
-                links[farm_id] = {
+                link: Dict[str, Any] = {
                     "farmId": farm_id,
-                    "cropSeasonId": crop_season_id,
-                    "spanText": fact.evidence_span,
                     "confidence": fact.confidence,
                 }
+                if crop_season_id:
+                    link["cropSeasonId"] = crop_season_id
+                if fact.evidence_span:
+                    link["spanText"] = fact.evidence_span[:1000]
+                links[farm_id] = link
 
         facts.append(
             {
@@ -106,7 +131,7 @@ def to_analysis_payload(
                 "confidence": fact.confidence,
                 **({"farmId": farm_id} if farm_id else {}),
                 **({"cropSeasonId": crop_season_id} if crop_season_id else {}),
-                **({"productKey": fact.product} if fact.product else {}),
+                **({"productKey": fact.product[:120]} if fact.product else {}),
                 "headline": fact.headline[:300],
                 **({"moneyHint": fact.money_hint} if fact.money_hint else {}),
                 **({"dueHintText": fact.due_hint_text} if fact.due_hint_text else {}),
@@ -142,6 +167,5 @@ def to_analysis_payload(
     if coach_tone:
         payload["coachTone"] = coach_tone
     deal = to_deal_payload(result.deal)
-    if deal and deal["contextSummary"] and deal["nextAction"]:
-        payload["deal"] = deal
+    payload["deal"] = deal or fallback_deal(transcript or result.session_summary)
     return payload
