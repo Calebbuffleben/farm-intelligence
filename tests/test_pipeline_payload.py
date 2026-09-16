@@ -12,7 +12,12 @@ from src.extractor.schema import (
     ExtractionResult,
     UnknownSpan,
 )
-from src.worker.payload import deal_quality_issues, resolve_due_at, to_analysis_payload
+from src.worker.payload import (
+    deal_quality_issues,
+    is_unusable_brief,
+    resolve_due_at,
+    to_analysis_payload,
+)
 
 CTX = {
     "farms": [
@@ -218,6 +223,31 @@ def test_previous_brief_is_preserved_as_stale():
     assert payload["deal"]["analysisQuality"] == "STALE"
 
 
+def test_generic_previous_brief_is_replaced_by_partial():
+    previous = {
+        "stage": "SONDAGEM",
+        "contextSummary": "Mensagem do produtor recebida; a extração automática não fechou o brief.",
+        "nextAction": "Releia a conversa e confirme o próximo passo com o produtor.",
+        "nextActionKind": "aguardar",
+        "nextActionOwner": "RTV",
+        "analysisQuality": "PARTIAL",
+    }
+    assert is_unusable_brief(previous)
+    ctx = {**CTX, "previousBrief": previous}
+    payload = to_analysis_payload(
+        ctx,
+        ExtractionResult(session_summary=""),
+        None,
+        0.7,
+        source_text="Preciso de 50 galões do herbicida X para o Chapadão.",
+    )
+    deal = payload["deal"]
+    assert deal["analysisQuality"] == "PARTIAL"
+    assert "Releia a conversa" not in deal["nextAction"]
+    assert "extração automática não fechou" not in deal["contextSummary"]
+    assert "herbicida X" in deal["producerPosition"]
+
+
 def test_relative_deadline_is_resolved_from_message_timestamp():
     due = resolve_due_at("até amanhã", "2026-09-16T12:00:00Z")
     assert due is not None
@@ -285,6 +315,7 @@ if __name__ == "__main__":
     test_deal_fallback_when_absent()
     test_text_body_is_used_by_contextual_fallback()
     test_previous_brief_is_preserved_as_stale()
+    test_generic_previous_brief_is_replaced_by_partial()
     test_relative_deadline_is_resolved_from_message_timestamp()
     test_generic_wait_is_rejected()
     test_discount_above_authority_requires_manager()

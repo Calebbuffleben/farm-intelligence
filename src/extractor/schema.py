@@ -99,8 +99,9 @@ class DealBriefOut(BaseModel):
     context_summary: str = Field(
         description="Contexto central: o que motivou a conversa (1-2 frases, PT-BR)"
     )
-    producer_position: str = Field(
-        description="O que o produtor quer, aceitou, recusou ou ainda precisa decidir"
+    producer_position: Optional[str] = Field(
+        default=None,
+        description="O que o produtor quer, aceitou, recusou ou ainda precisa decidir",
     )
     deal_change: Optional[str] = Field(
         default=None, description="O que mudou desde o brief anterior; null na primeira análise"
@@ -114,8 +115,9 @@ class DealBriefOut(BaseModel):
     next_action: str = Field(
         description="Próximo passo sugerido ao RTV, acionável, 1 frase"
     )
-    next_action_reason: str = Field(
-        description="Por que esta ação aumenta a chance de avanço"
+    next_action_reason: Optional[str] = Field(
+        default=None,
+        description="Por que esta ação aumenta a chance de avanço",
     )
     next_action_owner: str = Field(description="RTV | MANAGER", default="RTV")
     next_action_kind: str = Field(

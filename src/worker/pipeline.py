@@ -18,7 +18,7 @@ from ..extractor.coach import CopilotCoach
 from ..extractor.gemini_client import FactExtractor
 from ..extractor.schema import ExtractionResult
 from ..stt.gemini_stt import GeminiStt
-from .payload import deal_quality_issues, to_analysis_payload
+from .payload import deal_quality_issues, is_unusable_brief, to_analysis_payload
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,9 @@ class MessagePipeline:
         summaries = [
             s["summary"] for s in ctx.get("previousSummaries", []) if s.get("summary")
         ]
+        previous_brief = ctx.get("previousBrief") or None
+        if is_unusable_brief(previous_brief):
+            previous_brief = None
 
         try:
             result = self._extractor.extract(
@@ -85,7 +88,7 @@ class MessagePipeline:
                 human_links=ctx.get("humanLinks") or [],
                 session_retrieve=ctx.get("previousSummaries") or [],
                 sales_policy=ctx.get("salesPolicy") or None,
-                previous_brief=ctx.get("previousBrief") or None,
+                previous_brief=previous_brief,
             )
             quality_issues = deal_quality_issues(
                 result.deal, ctx.get("salesPolicy") or None
@@ -104,7 +107,7 @@ class MessagePipeline:
                     human_links=ctx.get("humanLinks") or [],
                     session_retrieve=ctx.get("previousSummaries") or [],
                     sales_policy=ctx.get("salesPolicy") or None,
-                    previous_brief=ctx.get("previousBrief") or None,
+                    previous_brief=previous_brief,
                     repair_feedback=quality_issues,
                 )
         except Exception:

@@ -101,12 +101,51 @@ def valid_iso_datetime(value: Optional[str]) -> Optional[str]:
         return None
 
 
+def _brief_blob(brief: Dict[str, Any]) -> str:
+    return _plain(
+        " ".join(
+            str(brief.get(key) or "")
+            for key in (
+                "contextSummary",
+                "context_summary",
+                "nextAction",
+                "next_action",
+            )
+        )
+    )
+
+
+def is_unusable_brief(brief: Optional[Dict[str, Any]]) -> bool:
+    """Brief anterior genérico ou já falho não deve ser preservado nem re-promptado."""
+    if not brief:
+        return True
+    quality = brief.get("analysisQuality") or brief.get("analysis_quality")
+    if quality in {"PARTIAL", "STALE"}:
+        return True
+    return any(phrase in _brief_blob(brief) for phrase in GENERIC_PHRASES)
+
+
+def fill_deal_gaps(deal: DealBriefOut) -> DealBriefOut:
+    """Completa campos novos quando o modelo devolveu só o núcleo comercial."""
+    updates: Dict[str, Any] = {}
+    context = (deal.context_summary or "").strip()
+    action = (deal.next_action or "").strip()
+    if not (deal.producer_position or "").strip() and context:
+        updates["producer_position"] = context[:600]
+    if not (deal.next_action_reason or "").strip() and action:
+        updates["next_action_reason"] = (
+            "Esta ação responde ao último ponto levantado pelo produtor."
+        )
+    return deal.model_copy(update=updates) if updates else deal
+
+
 def deal_quality_issues(
     deal: Optional[DealBriefOut],
     sales_policy: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     if deal is None:
         return ["bloco deal ausente"]
+    deal = fill_deal_gaps(deal)
     issues: List[str] = []
     context = (deal.context_summary or "").strip()
     action = (deal.next_action or "").strip()
@@ -197,8 +236,8 @@ def fallback_deal(
     facts: Optional[List[Any]] = None,
     previous_brief: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Fail-open fundamentado: preserva o brief anterior ou usa a mensagem real."""
-    if previous_brief:
+    """Fail-open fundamentado: preserva o brief anterior útil ou usa a mensagem real."""
+    if previous_brief and not is_unusable_brief(previous_brief):
         preserved = dict(previous_brief)
         preserved.pop("updatedAt", None)
         preserved.setdefault("stageConfidence", 0.3)
@@ -259,6 +298,7 @@ def to_deal_payload(
     """
     if deal is None:
         return None
+    deal = fill_deal_gaps(deal)
     stage = deal.stage if deal.stage in DEAL_STAGES else "SEM_NEGOCIO"
     kind = deal.next_action_kind if deal.next_action_kind in NEXT_ACTION_KINDS else None
     blocker = deal.blocker_subtype if deal.blocker_subtype in FACT_SUBTYPES else None
@@ -276,13 +316,16 @@ def to_deal_payload(
         "stage": stage,
         "stageConfidence": max(0.0, min(1.0, float(deal.stage_confidence))),
         "contextSummary": context,
-        "producerPosition": deal.producer_position.strip()[:600],
+        "producerPosition": (deal.producer_position or context).strip()[:600],
         "dealChange": deal.deal_change.strip()[:500] if deal.deal_change else None,
         "intent": deal.intent if deal.intent in DEAL_LEVELS else "MEDIA",
         "urgency": deal.urgency if deal.urgency in DEAL_LEVELS else "MEDIA",
         "painPoint": deal.pain_point.strip()[:400] if deal.pain_point else None,
         "nextAction": action,
-        "nextActionReason": deal.next_action_reason.strip()[:400],
+        "nextActionReason": (
+            deal.next_action_reason
+            or "Esta ação responde ao último ponto levantado pelo produtor."
+        ).strip()[:400],
         "nextActionOwner": deal.next_action_owner,
         "nextActionKind": kind,
         "nextActionDueHint": deal.next_action_due_hint[:80] if deal.next_action_due_hint else None,

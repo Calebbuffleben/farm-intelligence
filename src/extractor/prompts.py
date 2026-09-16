@@ -72,7 +72,9 @@ resume para o dono e o mentor que orienta o RTV:
   mesmo vocabulário dos subtipos, ou null.
 - `analysis_quality`: COMPLETE para brief fundamentado. Não use PARTIAL ou STALE; estes
   estados são reservados ao fail-open do sistema.
-- Se já existe um BRIEF ANTERIOR, refine-o com a nova mensagem em vez de recomeçar.
+- Se já existe um BRIEF ANTERIOR válido, refine-o com a nova mensagem em vez de recomeçar.
+  Se o brief anterior for genérico ou estiver marcado como inválido, IGNORE-O e
+  reconstrua a situação só com as mensagens.
 
 CRITÉRIOS DE QUALIDADE:
 - Nunca escreva “releia a conversa”, “entre em contato”, “confirme o próximo passo” ou
