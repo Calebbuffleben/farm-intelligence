@@ -201,6 +201,27 @@ def test_text_body_is_used_by_contextual_fallback():
     assert "última mensagem" in payload["deal"]["nextAction"]
 
 
+def test_fallback_turns_price_delivery_and_window_into_action():
+    result = ExtractionResult(session_summary="", facts=[])
+    payload = to_analysis_payload(
+        CTX,
+        result,
+        None,
+        0.7,
+        source_text=(
+            "Preciso fechar o herbicida da soja do Chapadão essa semana. "
+            "A janela abre sexta, quero 50 galões, mas preciso confirmar preço e entrega."
+        ),
+    )
+    deal = payload["deal"]
+    assert deal["analysisQuality"] == "PARTIAL"
+    assert deal["nextActionKind"] == "proposta"
+    assert "preço" in deal["nextAction"]
+    assert "disponibilidade" in deal["nextAction"]
+    assert "janela" in deal["nextAction"]
+    assert "Responda ao ponto específico" not in deal["nextAction"]
+
+
 def test_previous_brief_is_preserved_as_stale():
     previous = {
         "stage": "NEGOCIACAO",

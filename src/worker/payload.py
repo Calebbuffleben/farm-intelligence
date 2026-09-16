@@ -224,6 +224,34 @@ def _partial_action(facts: List[Any], snippet: str) -> tuple[str, str, Optional[
             "Esse é o sinal comercial mais concreto extraído da última mensagem.",
             "followup",
         )
+    normalized = _plain(snippet)
+    mentions_price = "preco" in normalized or "valor" in normalized
+    mentions_delivery = any(
+        term in normalized
+        for term in ("entrega", "entregar", "disponibilidade", "estoque")
+    )
+    mentions_window = any(
+        term in normalized
+        for term in ("janela", "plantio", "aplicacao", "sexta", "essa semana")
+    )
+    if mentions_price and mentions_delivery:
+        return (
+            "Confirme hoje o preço, a disponibilidade do volume solicitado e a entrega antes da janela informada pelo produtor.",
+            "O produtor sinalizou intenção de fechar, mas preço e prazo de entrega condicionam a aplicação.",
+            "proposta",
+        )
+    if mentions_delivery or mentions_window:
+        return (
+            "Confirme hoje a disponibilidade do volume solicitado e a entrega antes da janela informada pelo produtor.",
+            "O atraso citado pelo produtor coloca a janela de aplicação em risco.",
+            "logistica",
+        )
+    if mentions_price:
+        return (
+            "Envie a condição comercial permitida para o produto e volume solicitados e confirme se ela viabiliza o fechamento.",
+            "O preço é a condição comercial explícita para o produtor avançar.",
+            "proposta",
+        )
     return (
         f"Responda ao ponto específico da última mensagem: “{snippet}”.",
         "A análise detalhada falhou, mas a mensagem do produtor exige uma resposta contextual.",

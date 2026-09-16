@@ -4,13 +4,14 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 from ..config.settings import Settings
 from .prompts import SYSTEM_INSTRUCTION, build_user_prompt
 from .schema import ExtractionResult
 
 logger = logging.getLogger(__name__)
+FALLBACK_MODEL = "gemini-flash-latest"
 
 
 class FactExtractor:
@@ -48,18 +49,34 @@ class FactExtractor:
             previous_brief=previous_brief,
             repair_feedback=repair_feedback,
         )
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_INSTRUCTION,
+            response_mime_type="application/json",
+            response_schema=ExtractionResult,
+            max_output_tokens=self._max_tokens,
+            temperature=0.1,
+        )
         try:
             response = self._client.models.generate_content(
                 model=self._model,
                 contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
-                    response_mime_type="application/json",
-                    response_schema=ExtractionResult,
-                    max_output_tokens=self._max_tokens,
-                    temperature=0.1,
-                ),
+                config=config,
             )
+        except errors.ClientError as exc:
+            if exc.code != 404 or self._model == FALLBACK_MODEL:
+                logger.exception("Gemini generate_content falhou model=%s", self._model)
+                raise
+            logger.warning(
+                "modelo Gemini indisponível model=%s — tentando %s",
+                self._model,
+                FALLBACK_MODEL,
+            )
+            response = self._client.models.generate_content(
+                model=FALLBACK_MODEL,
+                contents=prompt,
+                config=config,
+            )
+            self._model = FALLBACK_MODEL
         except Exception:
             logger.exception("Gemini generate_content falhou model=%s", self._model)
             raise

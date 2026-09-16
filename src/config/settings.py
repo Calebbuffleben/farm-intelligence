@@ -34,7 +34,8 @@ class Settings:
 
     # Gemini — extração de fatos + resolução de entidade (JSON mode)
     gemini_api_key: Optional[str] = None
-    extractor_model: str = "gemini-3.1-flash"
+    # Modelo confirmado via ListModels para generateContent em 16/09/2026.
+    extractor_model: str = "gemini-3.8-flash"
     extractor_max_output_tokens: int = 4096
     # Copilot pós-STT: uma frase. Teto baixo de propósito (não é extração).
     coach_max_output_tokens: int = 256
