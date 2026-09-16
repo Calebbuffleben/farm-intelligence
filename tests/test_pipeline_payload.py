@@ -145,15 +145,14 @@ def test_valid_deal_passes_through():
 
 
 def test_deal_out_of_vocabulary_falls_to_defaults():
-    # Pydantic valida `stage` como Literal; o saneamento cobre kind/blocker.
     result = ExtractionResult(
         session_summary="ok",
         facts=[],
         deal=DealBriefOut(
-            stage="SONDAGEM",
+            stage="negociacao",
             context_summary="Pediu preço.",
-            intent="MEDIA",
-            urgency="BAIXA",
+            intent="media",
+            urgency="baixa",
             next_action="Mandar tabela.",
             next_action_kind="mandar_tabela_inventado",
             blocker_subtype="subtipo_inventado",
@@ -161,6 +160,9 @@ def test_deal_out_of_vocabulary_falls_to_defaults():
     )
     payload = to_analysis_payload(CTX, result, None, 0.7)
     deal = payload["deal"]
+    assert deal["stage"] == "SEM_NEGOCIO"
+    assert deal["intent"] == "MEDIA"
+    assert deal["urgency"] == "MEDIA"
     assert deal["nextActionKind"] == "aguardar"
     assert deal["blockerSubtype"] is None
     assert deal["painPoint"] is None

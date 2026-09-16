@@ -86,13 +86,15 @@ class DealBriefOut(BaseModel):
     pilares + GPS da venda (estágio e próximo passo).
     """
 
-    stage: DealStage = Field(description="Momento do cliente na compra")
+    # str (não Literal): o Gemini inventa valor e o Pydantic derrubava o
+    # ExtractionResult inteiro — fatos e deal iam embora juntos. Saneia em payload.py.
+    stage: str = Field(description="SONDAGEM | NEGOCIACAO | FECHAMENTO | POS_VENDA | SEM_NEGOCIO")
     stage_confidence: float = Field(ge=0.0, le=1.0, default=0.5)
     context_summary: str = Field(
         description="Contexto central: o que motivou a conversa (1-2 frases, PT-BR)"
     )
-    intent: DealLevel = Field(description="Nível real de interesse de compra")
-    urgency: DealLevel = Field(description="Pressa do cliente")
+    intent: str = Field(description="BAIXA | MEDIA | ALTA")
+    urgency: str = Field(description="BAIXA | MEDIA | ALTA")
     pain_point: Optional[str] = Field(
         default=None,
         description="Dor / objeção oculta: o que impede a venda agora",

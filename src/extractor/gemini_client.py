@@ -46,19 +46,30 @@ class FactExtractor:
             sales_policy=sales_policy,
             previous_brief=previous_brief,
         )
-        response = self._client.models.generate_content(
-            model=self._model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                response_mime_type="application/json",
-                response_schema=ExtractionResult,
-                max_output_tokens=self._max_tokens,
-                temperature=0.1,
-            ),
-        )
+        try:
+            response = self._client.models.generate_content(
+                model=self._model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION,
+                    response_mime_type="application/json",
+                    response_schema=ExtractionResult,
+                    max_output_tokens=self._max_tokens,
+                    temperature=0.1,
+                ),
+            )
+        except Exception:
+            logger.exception("Gemini generate_content falhou model=%s", self._model)
+            raise
         parsed = response.parsed
         if isinstance(parsed, ExtractionResult):
             return parsed
-        # Fallback: alguns SDKs retornam dict/str dependendo da versão
-        return ExtractionResult.model_validate_json(response.text)
+        text = getattr(response, "text", None) or ""
+        if not text.strip():
+            logger.error("Gemini devolveu vazio model=%s", self._model)
+            return ExtractionResult(session_summary="", facts=[], unknowns=[])
+        try:
+            return ExtractionResult.model_validate_json(text)
+        except Exception:
+            logger.exception("Gemini JSON inválido model=%s chars=%d", self._model, len(text))
+            raise

@@ -8,8 +8,9 @@ Esteira por mensagem (Fase 3):
     -> extração-delta (carteira + resumos + sessão como contexto)
     -> POST /internal/messages/{id}/analysis
 
-Falha em uma mensagem: loga e faz ACK (a mensagem fica no banco; reprocesso
-manual é possível re-publicando no stream — sem dead-letter no ano 1).
+Falha em uma mensagem: loga e NÃO dá ACK — o próximo loop relê o PEL.
+Restart do container (Railway) reusa o consumidor `worker-1`; sem ler o
+PEL (`0`) as mensagens entregues antes do kill ficam presas para sempre.
 """
 
 import logging
@@ -29,6 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("farm.worker")
 
+CONSUMER = "worker-1"
 _running = True
 
 
@@ -36,6 +38,22 @@ def _stop(signum, _frame):
     global _running
     logger.info("sinal %s recebido — encerrando", signum)
     _running = False
+
+
+def _handle_records(client, settings: Settings, pipeline: MessagePipeline, records) -> None:
+    for record_id, fields in records:
+        message_id = fields.get("messageId") if isinstance(fields, dict) else None
+        try:
+            if not message_id:
+                logger.warning("registro sem messageId: %s", fields)
+                client.xack(settings.work_stream, settings.consumer_group, record_id)
+                continue
+            logger.info("processando message=%s redis_id=%s", message_id, record_id)
+            pipeline.process(message_id)
+            client.xack(settings.work_stream, settings.consumer_group, record_id)
+            logger.info("ack message=%s", message_id)
+        except Exception:
+            logger.exception("esteira falhou message=%s — sem ack, tenta de novo", message_id)
 
 
 def main() -> int:
@@ -76,11 +94,38 @@ def main() -> int:
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
+    # Restart: reivindica o que ficou no PEL deste consumidor e de workers mortos.
+    try:
+        _next, claimed, *_rest = client.xautoclaim(
+            settings.work_stream,
+            settings.consumer_group,
+            CONSUMER,
+            min_idle_time=0,
+            start_id="0-0",
+            count=50,
+        )
+        if claimed:
+            logger.info("pel recuperado n=%d", len(claimed))
+            _handle_records(client, settings, pipeline, claimed)
+    except Exception:
+        logger.exception("xautoclaim falhou — segue no loop")
+
     while _running:
         try:
+            pending = client.xreadgroup(
+                settings.consumer_group,
+                CONSUMER,
+                {settings.work_stream: "0"},
+                count=10,
+            )
+            if pending:
+                for _stream, records in pending:
+                    _handle_records(client, settings, pipeline, records)
+                time.sleep(2)
+                continue
             entries = client.xreadgroup(
                 settings.consumer_group,
-                "worker-1",
+                CONSUMER,
                 {settings.work_stream: ">"},
                 count=10,
                 block=block_ms,
@@ -90,16 +135,7 @@ def main() -> int:
         if not entries:
             continue
         for _stream, records in entries:
-            for record_id, fields in records:
-                message_id = fields.get("messageId")
-                try:
-                    if message_id:
-                        pipeline.process(message_id)
-                    else:
-                        logger.warning("registro sem messageId: %s", fields)
-                except Exception:
-                    logger.exception("esteira falhou message=%s", message_id)
-                client.xack(settings.work_stream, settings.consumer_group, record_id)
+            _handle_records(client, settings, pipeline, records)
         time.sleep(0.05)
     return 0
 
