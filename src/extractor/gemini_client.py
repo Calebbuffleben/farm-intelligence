@@ -1,6 +1,7 @@
 """Chamada ao Gemini em JSON mode com schema estruturado (pydantic)."""
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 from google import genai
@@ -11,9 +12,28 @@ from .prompts import SYSTEM_INSTRUCTION, build_user_prompt
 from .schema import ExtractionResult
 
 logger = logging.getLogger(__name__)
-FALLBACK_MODEL = "gemini-flash-latest"
+# gemini-flash-latest aponta para o preview da vez (3.8) — mesmo pool 503.
+# 2.5 / 2.0 são estáveis e costumam ter cota quando o preview satura.
+FALLBACK_MODELS = (
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+)
+FALLBACK_MODEL = FALLBACK_MODELS[0]
 # 404 = modelo inexistente; 429/503 = cota ou sobrecarga temporária.
 _RETRYABLE_CODES = {404, 429, 503}
+_BACKOFF_S = (0.0, 1.5, 3.0, 5.0)
+
+
+def model_chain(primary: str) -> List[str]:
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for model in (primary, *FALLBACK_MODELS):
+        if model in seen:
+            continue
+        seen.add(model)
+        ordered.append(model)
+    return ordered
 
 
 class FactExtractor:
@@ -81,9 +101,7 @@ class FactExtractor:
         return types.GenerateContentConfig(**kwargs)
 
     def _generate(self, prompt: str, config: types.GenerateContentConfig):
-        models = [self._model]
-        if self._model != FALLBACK_MODEL:
-            models.append(FALLBACK_MODEL)
+        models = model_chain(self._model)
         last_error: Optional[BaseException] = None
         for index, model in enumerate(models):
             try:
@@ -107,14 +125,22 @@ class FactExtractor:
                 if not retryable or not has_next:
                     logger.exception("Gemini generate_content falhou model=%s", model)
                     raise
+                wait = _BACKOFF_S[min(index + 1, len(_BACKOFF_S) - 1)]
                 logger.warning(
-                    "Gemini %s model=%s — tentando %s",
+                    "Gemini %s model=%s — tentando %s em %.1fs",
                     getattr(exc, "code", "?"),
                     model,
                     models[index + 1],
+                    wait,
                 )
+                if wait > 0:
+                    self._sleep(wait)
             except Exception:
                 logger.exception("Gemini generate_content falhou model=%s", model)
                 raise
         assert last_error is not None
         raise last_error
+
+    @staticmethod
+    def _sleep(seconds: float) -> None:
+        time.sleep(seconds)

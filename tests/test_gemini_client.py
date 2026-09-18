@@ -10,16 +10,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from google.genai import errors
 
 from src.config.settings import Settings
-from src.extractor.gemini_client import FALLBACK_MODEL, FactExtractor
+from src.extractor.gemini_client import (
+    FALLBACK_MODELS,
+    FactExtractor,
+    model_chain,
+)
 from src.extractor.schema import ExtractionResult
 
+PRIMARY = "gemini-3.8-flash"
 
-def _extractor(model: str = "gemini-3.8-flash"):
+
+def _extractor(model: str = PRIMARY):
     with patch("src.extractor.gemini_client.genai.Client") as cls:
         mock = MagicMock()
         cls.return_value = mock
         ext = FactExtractor(Settings(gemini_api_key="k", extractor_model=model))
         ext._client = mock
+        ext._sleep = lambda _seconds: None
         return ext, mock
 
 
@@ -42,19 +49,46 @@ def _messages():
     return [{"index": 0, "direction": "IN", "text": "preciso de cotação", "ts": ""}]
 
 
-def test_503_retries_fallback_model():
+def test_model_chain_dedupes_primary():
+    chain = model_chain("gemini-2.5-flash")
+    assert chain[0] == "gemini-2.5-flash"
+    assert chain == list(dict.fromkeys(chain))
+
+
+def test_503_retries_stable_flash():
     ext, client = _extractor()
-    client.models.generate_content.side_effect = [_server_error(503), _ok_response()]
+    client.models.generate_content.side_effect = [
+        _server_error(503),
+        _ok_response(),
+    ]
     result = ext.extract({}, [], _messages())
     assert result.session_summary == "resumo"
-    assert ext._model == FALLBACK_MODEL
+    assert ext._model == FALLBACK_MODELS[0]
     models = [c.kwargs["model"] for c in client.models.generate_content.call_args_list]
-    assert models == ["gemini-3.8-flash", FALLBACK_MODEL]
+    assert models == [PRIMARY, FALLBACK_MODELS[0]]
+
+
+def test_503_walks_full_chain_then_raises():
+    ext, client = _extractor()
+    chain = model_chain(PRIMARY)
+    client.models.generate_content.side_effect = [_server_error(503)] * len(chain)
+    try:
+        ext.extract({}, [], _messages())
+    except errors.ServerError as exc:
+        assert exc.code == 503
+    else:
+        raise AssertionError("esperava ServerError")
+    assert client.models.generate_content.call_count == len(chain)
+    models = [c.kwargs["model"] for c in client.models.generate_content.call_args_list]
+    assert models == chain
 
 
 def test_429_retries_fallback_model():
     ext, client = _extractor()
-    client.models.generate_content.side_effect = [_server_error(429), _ok_response("ok")]
+    client.models.generate_content.side_effect = [
+        _server_error(429),
+        _ok_response("ok"),
+    ]
     result = ext.extract({}, [], _messages())
     assert result.session_summary == "ok"
 
@@ -69,22 +103,7 @@ def test_404_retries_fallback_model():
     client.models.generate_content.side_effect = [not_found, _ok_response("ok")]
     result = ext.extract({}, [], _messages())
     assert result.session_summary == "ok"
-    assert ext._model == FALLBACK_MODEL
-
-
-def test_both_models_503_raises():
-    ext, client = _extractor()
-    client.models.generate_content.side_effect = [
-        _server_error(503),
-        _server_error(503),
-    ]
-    try:
-        ext.extract({}, [], _messages())
-    except errors.ServerError as exc:
-        assert exc.code == 503
-    else:
-        raise AssertionError("esperava ServerError")
-    assert client.models.generate_content.call_count == 2
+    assert ext._model == FALLBACK_MODELS[0]
 
 
 def test_400_does_not_fallback():
@@ -105,9 +124,10 @@ def test_400_does_not_fallback():
 
 
 if __name__ == "__main__":
-    test_503_retries_fallback_model()
+    test_model_chain_dedupes_primary()
+    test_503_retries_stable_flash()
+    test_503_walks_full_chain_then_raises()
     test_429_retries_fallback_model()
     test_404_retries_fallback_model()
-    test_both_models_503_raises()
     test_400_does_not_fallback()
     print("gemini_client ok")
