@@ -12,6 +12,8 @@ from .schema import ExtractionResult
 
 logger = logging.getLogger(__name__)
 FALLBACK_MODEL = "gemini-flash-latest"
+# 404 = modelo inexistente; 429/503 = cota ou sobrecarga temporária.
+_RETRYABLE_CODES = {404, 429, 503}
 
 
 class FactExtractor:
@@ -49,37 +51,8 @@ class FactExtractor:
             previous_brief=previous_brief,
             repair_feedback=repair_feedback,
         )
-        config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
-            response_mime_type="application/json",
-            response_schema=ExtractionResult,
-            max_output_tokens=self._max_tokens,
-            temperature=0.1,
-        )
-        try:
-            response = self._client.models.generate_content(
-                model=self._model,
-                contents=prompt,
-                config=config,
-            )
-        except errors.ClientError as exc:
-            if exc.code != 404 or self._model == FALLBACK_MODEL:
-                logger.exception("Gemini generate_content falhou model=%s", self._model)
-                raise
-            logger.warning(
-                "modelo Gemini indisponível model=%s — tentando %s",
-                self._model,
-                FALLBACK_MODEL,
-            )
-            response = self._client.models.generate_content(
-                model=FALLBACK_MODEL,
-                contents=prompt,
-                config=config,
-            )
-            self._model = FALLBACK_MODEL
-        except Exception:
-            logger.exception("Gemini generate_content falhou model=%s", self._model)
-            raise
+        config = self._content_config()
+        response = self._generate(prompt, config)
         parsed = response.parsed
         if isinstance(parsed, ExtractionResult):
             return parsed
@@ -92,3 +65,56 @@ class FactExtractor:
         except Exception:
             logger.exception("Gemini JSON inválido model=%s chars=%d", self._model, len(text))
             raise
+
+    def _content_config(self) -> types.GenerateContentConfig:
+        kwargs: Dict[str, Any] = {
+            "system_instruction": SYSTEM_INSTRUCTION,
+            "response_mime_type": "application/json",
+            "response_schema": ExtractionResult,
+            "max_output_tokens": self._max_tokens,
+            "temperature": 0.1,
+        }
+        # JSON mode + schema pydantic não deve virar loop de function calling.
+        afc = getattr(types, "AutomaticFunctionCallingConfig", None)
+        if afc is not None:
+            kwargs["automatic_function_calling"] = afc(disable=True)
+        return types.GenerateContentConfig(**kwargs)
+
+    def _generate(self, prompt: str, config: types.GenerateContentConfig):
+        models = [self._model]
+        if self._model != FALLBACK_MODEL:
+            models.append(FALLBACK_MODEL)
+        last_error: Optional[BaseException] = None
+        for index, model in enumerate(models):
+            try:
+                response = self._client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=config,
+                )
+                if model != self._model:
+                    logger.warning(
+                        "Gemini ok no fallback model=%s (primário=%s)",
+                        model,
+                        self._model,
+                    )
+                    self._model = model
+                return response
+            except (errors.ClientError, errors.ServerError) as exc:
+                last_error = exc
+                retryable = getattr(exc, "code", None) in _RETRYABLE_CODES
+                has_next = index < len(models) - 1
+                if not retryable or not has_next:
+                    logger.exception("Gemini generate_content falhou model=%s", model)
+                    raise
+                logger.warning(
+                    "Gemini %s model=%s — tentando %s",
+                    getattr(exc, "code", "?"),
+                    model,
+                    models[index + 1],
+                )
+            except Exception:
+                logger.exception("Gemini generate_content falhou model=%s", model)
+                raise
+        assert last_error is not None
+        raise last_error
