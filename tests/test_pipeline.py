@@ -115,9 +115,49 @@ def test_audio_empty_extract_does_not_ack():
     p._backend.post_analysis.assert_not_called()
 
 
+def test_image_caption_goes_to_extractor_without_media_fetch():
+    p = _pipeline()
+    p._backend.get_context.return_value = {
+        "message": {
+            "id": "m1",
+            "direction": "IN",
+            "type": "IMAGE",
+            "transcript": None,
+            "body": "ferrugem na soja do chapadao",
+            "sentAt": "2026-09-18T00:00:00Z",
+            "mediaAsset": None,
+        },
+        "analysisAllowed": True,
+        "sessionMessages": [
+            {
+                "id": "m1",
+                "direction": "IN",
+                "type": "IMAGE",
+                "body": "ferrugem na soja do chapadao",
+                "sentAt": "",
+            }
+        ],
+        "previousSummaries": [],
+        "humanLinks": [],
+        "salesPolicy": None,
+        "previousBrief": None,
+        "producer": None,
+        "farms": [],
+    }
+    p._extractor.extract.return_value = ExtractionResult(
+        session_summary="ok", facts=[], unknowns=[]
+    )
+    p.process("m1")
+    p._backend.get_message_media.assert_not_called()
+    session = p._extractor.extract.call_args.args[2]
+    assert session[0]["text"] == "[imagem] ferrugem na soja do chapadao"
+    p._backend.post_analysis.assert_called_once()
+
+
 if __name__ == "__main__":
     test_audio_goes_to_extractor_without_stt()
     test_audio_prefers_asset_content_type()
     test_audio_media_fetch_failure_does_not_publish()
     test_audio_empty_extract_does_not_ack()
+    test_image_caption_goes_to_extractor_without_media_fetch()
     print("pipeline ok")

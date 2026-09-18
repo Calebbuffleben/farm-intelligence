@@ -159,13 +159,11 @@ class MessagePipeline:
         messages: List[Dict[str, Any]] = []
         target_index = 0
         for i, m in enumerate(ctx.get("sessionMessages", [])):
-            text = m.get("transcript") or m.get("body") or f"[{m['type'].lower()}]"
+            text = _display_text(m)
             if m["id"] == message_id:
                 target_index = i
                 if fresh_transcript:
                     text = fresh_transcript
-                elif m.get("type") == "AUDIO":
-                    text = "[áudio]"
             messages.append(
                 {
                     "index": i,
@@ -196,6 +194,24 @@ class MessagePipeline:
                 for farm in ctx.get("farms", [])
             ],
         }
+
+
+def _display_text(m: Dict[str, Any]) -> str:
+    """Texto que o Gemini lê: transcrição, body, ou legenda da mídia."""
+    spoken = (m.get("transcript") or "").strip()
+    if spoken:
+        return spoken
+    body = (m.get("body") or "").strip()
+    kind = (m.get("type") or "").upper()
+    if kind == "IMAGE":
+        return f"[imagem] {body}" if body else "[imagem]"
+    if kind == "DOCUMENT":
+        return f"[documento] {body}" if body else "[documento]"
+    if kind == "AUDIO":
+        return "[áudio]"
+    if kind and kind not in {"TEXT", ""}:
+        return f"[{kind.lower()}] {body}" if body else f"[{kind.lower()}]"
+    return body or "[texto]"
 
 
 def _audio_was_analyzed(result: ExtractionResult) -> bool:
