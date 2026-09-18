@@ -27,7 +27,7 @@ def redis_url_from_env() -> str:
 
 @dataclass
 class Settings:
-    # Fila de trabalho (backend publica message_ready após mídia no storage)
+    # Fila de trabalho (backend publica message_ready no ingest de TEXT/AUDIO)
     redis_url: str = _DEFAULT_REDIS
     work_stream: str = "farm:messages:ready"
     consumer_group: str = "intelligence"

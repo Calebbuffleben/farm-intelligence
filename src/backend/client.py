@@ -2,7 +2,8 @@
 
 Endpoints (todos fora da borda pública):
   GET  /internal/messages/{id}/context   -> contexto completo para o extrator
-  GET  /internal/media/{assetId}         -> bytes da mídia (STT)
+  GET  /internal/messages/{id}/media     -> bytes da mídia (STT; S3 ou canal)
+  GET  /internal/media/{assetId}         -> bytes da mídia (legado, via S3)
   POST /internal/messages/{id}/analysis  -> transcript + links + fatos + unknowns
 """
 
@@ -33,6 +34,16 @@ class BackendClient:
         )
         resp.raise_for_status()
         return resp.json()
+
+    def get_message_media(self, message_id: str) -> tuple[bytes, str]:
+        resp = requests.get(
+            f"{self._base}/internal/messages/{message_id}/media",
+            headers=self._headers,
+            timeout=90,
+        )
+        resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "application/octet-stream")
+        return resp.content, content_type
 
     def get_media(self, asset_id: str) -> tuple[bytes, str]:
         resp = requests.get(

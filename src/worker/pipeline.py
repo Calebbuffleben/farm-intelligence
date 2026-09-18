@@ -45,14 +45,10 @@ class MessagePipeline:
 
         transcript: Optional[str] = message.get("transcript")
         if message["type"] == "AUDIO" and not transcript:
-            asset = message.get("mediaAsset")
-            if not asset:
-                # Sem ACK: MediaWorker ainda não subiu o ficheiro. ACK aqui
-                # enterra o áudio — kick do inbox só vê AUDIO com mediaAsset.
-                raise RuntimeError(
-                    f"áudio sem mediaAsset — espera MediaWorker message={message_id}"
-                )
-            audio, content_type = self._backend.get_media(asset["id"])
+            # Bytes vêm do backend: S3 se existir, senão download ao vivo
+            # no canal. Sem ACK se a busca falhar — Redis reentrega.
+            audio, content_type = self._backend.get_message_media(message_id)
+            asset = message.get("mediaAsset") or {}
             transcript = self._stt.transcribe(
                 audio, asset.get("contentType") or content_type
             )
