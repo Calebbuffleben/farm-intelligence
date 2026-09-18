@@ -16,16 +16,35 @@ from typing import Any, Dict, List, Optional
 
 from .schema import FACT_SUBTYPES, NEXT_ACTION_KINDS
 
+SPEAKER = {
+    "IN": "PRODUTOR (cliente)",
+    "OUT": "RTV (vendedor da revenda)",
+}
+
+
+def speaker_label(direction: Optional[str]) -> str:
+    return SPEAKER.get((direction or "").upper(), "DESCONHECIDO")
+
 SYSTEM_INSTRUCTION = """Você é um analista comercial sênior de uma revenda de insumos agrícolas no Brasil.
 Você lê conversas de WhatsApp entre um vendedor técnico (RTV) e um produtor rural e extrai
 inteligência comercial estruturada para o dono da revenda.
+
+QUEM FALA — regra inegociável:
+- PRODUTOR (cliente) = direção IN: o que o cliente quer, aceita, recusa, objeta ou pede prazo.
+- RTV (vendedor da revenda) = direção OUT: oferta, pergunta, condição ou compromisso da revenda.
+- NUNCA trate fala do RTV como posição do produtor. `producer_position`, objeção, intent e
+  urgência vêm do PRODUTOR. Fala do RTV é contexto (o que foi oferecido) e não vira fato
+  de intenção de compra.
+- Fatos (OBJECAO, RISCO, OPORTUNIDADE, FOLLOWUP, CONCORRENTE) nascem do que o PRODUTOR
+  disse. Compromisso do RTV ("te mando a tabela hoje") não é OPORTUNIDADE do cliente.
 
 Você recebe:
 1. A CARTEIRA do produtor: fazendas (com id), culturas, safras, fatos ABERTOS
    do FarmState (openFacts) e lastFactAt — use isso para não re-extrair o que
    já está aberto e para resolver referências ("aquele desconto", "o risco").
 2. RETRIEVE de sessões anteriores (quando foram fechadas e o resumo, se houver).
-3. As MENSAGENS da sessão atual, numeradas por índice.
+3. As MENSAGENS da sessão atual, numeradas por índice, cada uma prefixada com
+   PRODUTOR (cliente) ou RTV (vendedor da revenda).
 4. Vínculos HUMAN confirmados (não contradizer).
 
 Sua tarefa:
@@ -134,8 +153,11 @@ def build_user_prompt(
         lines.append(json.dumps(session_retrieve, ensure_ascii=False, default=str, indent=2))
         lines.append("")
     lines.append("## MENSAGENS DA SESSÃO ATUAL")
+    lines.append(
+        "Legenda: PRODUTOR (cliente) = inbound; RTV (vendedor da revenda) = outbound."
+    )
     for m in messages:
-        who = "PRODUTOR" if m.get("direction") == "IN" else "RTV"
+        who = speaker_label(str(m.get("direction") or ""))
         ts = m.get("ts", "")
         lines.append(f"[{m['index']}] {ts} {who}: {m.get('text', '')}")
     lines.append("")
@@ -174,14 +196,17 @@ def build_user_prompt(
         )
         lines.append("")
     if audio_target:
-        tgt = target_index if target_index is not None else "?"
+        tgt = target_index if target_index is not None else 0
+        target = next((m for m in messages if m.get("index") == tgt), None)
+        who = speaker_label(str((target or {}).get("direction") or "IN"))
         lines.append(
-            f"## ÁUDIO DA MENSAGEM ALVO [{tgt}]\n"
-            "O anexo é o recado de voz do produtor no WhatsApp. Trate-o exatamente "
+            f"## ÁUDIO DA MENSAGEM ALVO [{tgt}] — falado por {who}\n"
+            "O anexo é o recado de voz dessa mensagem. Trate-o exatamente "
             "como um texto digitado: é a mensagem alvo da extração. "
             "Preencha `transcript` com a transcrição fiel em PT-BR (só o que foi dito). "
-            "Extraia fatos, unknowns e `deal` a partir do que foi FALADO — tom, "
-            "hesitação, preço, prazo e produto contam. "
+            f"Se o falante é PRODUTOR (cliente): extraia fatos e deal dessa fala. "
+            f"Se o falante é RTV: o áudio é oferta/resposta da revenda — não atribua "
+            "intent nem objeção ao cliente. "
             "Na lista acima, `[áudio]` é só marcador; o conteúdo está no anexo."
         )
         lines.append("")
