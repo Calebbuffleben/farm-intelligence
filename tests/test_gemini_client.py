@@ -138,6 +138,19 @@ def test_truncated_json_tries_next_model():
     assert models[1] == "gemini-2.5-flash-lite"
 
 
+def test_extract_sends_audio_in_same_call():
+    ext, client = _extractor()
+    client.models.generate_content.return_value = _ok_response()
+    wav = b"RIFF" + b"\x00" * 12
+    ext.extract({}, [], _messages(), audio=wav, audio_mime="audio/wav")
+    contents = client.models.generate_content.call_args.kwargs["contents"]
+    assert isinstance(contents, list)
+    assert len(contents) == 2
+    prompt = contents[1]
+    text = getattr(prompt, "text", None) or str(prompt)
+    assert "ÁUDIO DA MENSAGEM ALVO" in text
+
+
 if __name__ == "__main__":
     test_model_chain_dedupes_primary()
     test_503_retries_stable_flash()
@@ -146,4 +159,5 @@ if __name__ == "__main__":
     test_404_retries_fallback_model()
     test_400_does_not_fallback()
     test_truncated_json_tries_next_model()
+    test_extract_sends_audio_in_same_call()
     print("gemini_client ok")

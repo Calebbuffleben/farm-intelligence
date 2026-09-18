@@ -11,7 +11,8 @@ from google import genai
 from google.genai import errors, types
 
 from ..config.settings import Settings
-from ..extractor.gemini_client import FALLBACK_MODELS, _uses_thinking, model_chain
+from ..extractor.gemini_client import _uses_thinking, model_chain
+from .audio_convert import audio_kind, to_stt_audio
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,20 @@ class GeminiStt:
         if not self._client:
             logger.warning("STT skip — sem GEMINI_API_KEY")
             return ""
-        mime = stt_mime(mime_type)
+        if not audio:
+            raise RuntimeError("STT sem bytes de áudio")
+        audio, mime = to_stt_audio(audio, stt_mime(mime_type))
+        logger.info(
+            "STT request bytes=%d mime=%s kind=%s",
+            len(audio),
+            mime,
+            audio_kind(audio) or "unknown",
+        )
+        prompt = (
+            types.Part.from_text(text=_PROMPT)
+            if hasattr(types.Part, "from_text")
+            else _PROMPT
+        )
         last_error: Optional[BaseException] = None
         for model in model_chain(self._model):
             try:
@@ -71,7 +85,7 @@ class GeminiStt:
                     model=model,
                     contents=[
                         types.Part.from_bytes(data=audio, mime_type=mime),
-                        _PROMPT,
+                        prompt,
                     ],
                     config=types.GenerateContentConfig(**kwargs),
                 )

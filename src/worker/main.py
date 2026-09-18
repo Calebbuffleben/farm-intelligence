@@ -1,11 +1,10 @@
 """Worker batch do Farm — consome mensagens prontas e roda a esteira.
 
 Esteira por mensagem (Fase 3):
-  farm:messages:ready (Redis stream, publicado pelo backend: texto na
-  ingestão, mídia após o MediaWorker subir para o storage)
+  farm:messages:ready (Redis stream: texto e áudio na ingestão)
     -> GET /internal/messages/{id}/context
-    -> STT (Gemini) se áudio sem transcrição
-    -> extração-delta (carteira + resumos + sessão como contexto)
+    -> GET /internal/messages/{id}/media se áudio (canal, sem exigir S3)
+    -> extração-delta no Gemini (texto ou bytes de áudio na mesma chamada)
     -> POST /internal/messages/{id}/analysis
 
 Falha em uma mensagem: loga e NÃO dá ACK — o próximo loop relê o PEL.

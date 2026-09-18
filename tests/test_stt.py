@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config.settings import Settings
 from src.stt.gemini_stt import GeminiStt, stt_mime
+from src.stt.audio_convert import audio_kind, needs_pcm_convert, to_stt_audio
 
 
 def test_stt_mime_strips_opus_codec():
@@ -21,7 +22,28 @@ def test_no_api_key_returns_empty():
     assert stt.transcribe(b"x", "audio/ogg") == ""
 
 
+def test_opus_needs_convert():
+    assert needs_pcm_convert("audio/ogg; codecs=opus") is True
+    assert needs_pcm_convert("audio/mp4") is False
+    assert needs_pcm_convert("audio/wav") is False
+
+
+def test_ogg_magic():
+    assert audio_kind(b"OggS....") == "ogg"
+    assert audio_kind(b"RIFF....WAVE") == "wav"
+
+
+def test_to_stt_passthrough_wav():
+    wav = b"RIFF" + b"\x00" * 8
+    out, mime = to_stt_audio(wav, "audio/wav")
+    assert out == wav
+    assert mime == "audio/wav"
+
+
 if __name__ == "__main__":
     test_stt_mime_strips_opus_codec()
     test_no_api_key_returns_empty()
+    test_opus_needs_convert()
+    test_ogg_magic()
+    test_to_stt_passthrough_wav()
     print("stt ok")

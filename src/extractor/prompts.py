@@ -107,6 +107,7 @@ def build_user_prompt(
     sales_policy: Optional[Dict[str, Any]] = None,
     previous_brief: Optional[Dict[str, Any]] = None,
     repair_feedback: Optional[List[str]] = None,
+    audio_target: bool = False,
 ) -> str:
     """Monta o prompt de usuário para uma sessão lógica.
 
@@ -172,8 +173,20 @@ def build_user_prompt(
             f"Todo fato deve ter evidence_message_index={target_index}."
         )
         lines.append("")
+    if audio_target:
+        tgt = target_index if target_index is not None else "?"
+        lines.append(
+            f"## ÁUDIO DA MENSAGEM ALVO [{tgt}]\n"
+            "O anexo é o recado de voz do produtor no WhatsApp. Trate-o exatamente "
+            "como um texto digitado: é a mensagem alvo da extração. "
+            "Preencha `transcript` com a transcrição fiel em PT-BR (só o que foi dito). "
+            "Extraia fatos, unknowns e `deal` a partir do que foi FALADO — tom, "
+            "hesitação, preço, prazo e produto contam. "
+            "Na lista acima, `[áudio]` é só marcador; o conteúdo está no anexo."
+        )
+        lines.append("")
     lines.append(
         "Retorne o JSON no schema ExtractionResult "
-        "(session_summary, facts[], unknowns[], deal)."
+        "(session_summary, facts[], unknowns[], deal, transcript)."
     )
     return "\n".join(lines)

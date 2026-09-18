@@ -11,6 +11,7 @@ from google.genai import errors, types
 from ..config.settings import Settings
 from .prompts import SYSTEM_INSTRUCTION, build_user_prompt
 from .schema import ExtractionResult
+from ..stt.audio_convert import to_stt_audio
 
 logger = logging.getLogger(__name__)
 # gemini-flash-latest aponta para o preview da vez (3.8) — mesmo pool 503.
@@ -68,6 +69,8 @@ class FactExtractor:
         sales_policy: Optional[Dict[str, Any]] = None,
         previous_brief: Optional[Dict[str, Any]] = None,
         repair_feedback: Optional[List[str]] = None,
+        audio: Optional[bytes] = None,
+        audio_mime: Optional[str] = None,
     ) -> ExtractionResult:
         if not self._client:
             return ExtractionResult(session_summary="", facts=[], unknowns=[])
@@ -81,8 +84,9 @@ class FactExtractor:
             sales_policy=sales_policy,
             previous_brief=previous_brief,
             repair_feedback=repair_feedback,
+            audio_target=bool(audio),
         )
-        return self._generate(prompt)
+        return self._generate(prompt, audio=audio, audio_mime=audio_mime)
 
     def _content_config(self, model: str) -> types.GenerateContentConfig:
         kwargs: Dict[str, Any] = {
@@ -101,14 +105,20 @@ class FactExtractor:
             kwargs["thinking_config"] = thinking(thinking_budget=0)
         return types.GenerateContentConfig(**kwargs)
 
-    def _generate(self, prompt: str) -> ExtractionResult:
+    def _generate(
+        self,
+        prompt: str,
+        audio: Optional[bytes] = None,
+        audio_mime: Optional[str] = None,
+    ) -> ExtractionResult:
+        contents = self._contents(prompt, audio, audio_mime)
         models = model_chain(self._model)
         last_error: Optional[BaseException] = None
         for index, model in enumerate(models):
             try:
                 response = self._client.models.generate_content(
                     model=model,
-                    contents=prompt,
+                    contents=contents,
                     config=self._content_config(model),
                 )
                 parsed = self._parse_response(response, model)
@@ -149,6 +159,23 @@ class FactExtractor:
             return parsed
         assert last_error is not None
         raise last_error
+
+    @staticmethod
+    def _contents(
+        prompt: str,
+        audio: Optional[bytes],
+        audio_mime: Optional[str],
+    ) -> Any:
+        if not audio:
+            return prompt
+        converted, mime = to_stt_audio(audio, audio_mime or "audio/ogg")
+        logger.info("extract com áudio bytes=%d mime=%s", len(converted), mime)
+        prompt_part = (
+            types.Part.from_text(text=prompt)
+            if hasattr(types.Part, "from_text")
+            else prompt
+        )
+        return [types.Part.from_bytes(data=converted, mime_type=mime), prompt_part]
 
     def _parse_response(self, response: Any, model: str) -> ExtractionResult:
         parsed = getattr(response, "parsed", None)

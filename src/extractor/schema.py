@@ -161,3 +161,10 @@ class ExtractionResult(BaseModel):
     deal: Optional[DealBriefOut] = Field(
         default=None, description="Situação do negócio da conversa"
     )
+    transcript: Optional[str] = Field(
+        default=None,
+        description=(
+            "Transcrição fiel em PT-BR do recado de voz da mensagem alvo; "
+            "null quando a mensagem alvo é texto"
+        ),
+    )
