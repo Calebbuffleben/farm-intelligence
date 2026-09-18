@@ -1,6 +1,7 @@
 """Chamada ao Gemini em JSON mode com schema estruturado (pydantic)."""
 
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -23,6 +24,7 @@ FALLBACK_MODEL = FALLBACK_MODELS[0]
 # 404 = modelo inexistente; 429/503 = cota ou sobrecarga temporária.
 _RETRYABLE_CODES = {404, 429, 503}
 _BACKOFF_S = (0.0, 1.5, 3.0, 5.0)
+_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
 
 def model_chain(primary: str) -> List[str]:
@@ -34,6 +36,15 @@ def model_chain(primary: str) -> List[str]:
         seen.add(model)
         ordered.append(model)
     return ordered
+
+
+def _uses_thinking(model: str) -> bool:
+    name = model.lower()
+    return "2.5" in name or name.startswith("gemini-3")
+
+
+class _UnusableResponse(Exception):
+    """HTTP 200 com JSON truncado ou vazio — tenta o próximo modelo."""
 
 
 class FactExtractor:
@@ -71,22 +82,9 @@ class FactExtractor:
             previous_brief=previous_brief,
             repair_feedback=repair_feedback,
         )
-        config = self._content_config()
-        response = self._generate(prompt, config)
-        parsed = response.parsed
-        if isinstance(parsed, ExtractionResult):
-            return parsed
-        text = getattr(response, "text", None) or ""
-        if not text.strip():
-            logger.error("Gemini devolveu vazio model=%s", self._model)
-            return ExtractionResult(session_summary="", facts=[], unknowns=[])
-        try:
-            return ExtractionResult.model_validate_json(text)
-        except Exception:
-            logger.exception("Gemini JSON inválido model=%s chars=%d", self._model, len(text))
-            raise
+        return self._generate(prompt)
 
-    def _content_config(self) -> types.GenerateContentConfig:
+    def _content_config(self, model: str) -> types.GenerateContentConfig:
         kwargs: Dict[str, Any] = {
             "system_instruction": SYSTEM_INSTRUCTION,
             "response_mime_type": "application/json",
@@ -94,13 +92,16 @@ class FactExtractor:
             "max_output_tokens": self._max_tokens,
             "temperature": 0.1,
         }
-        # JSON mode + schema pydantic não deve virar loop de function calling.
         afc = getattr(types, "AutomaticFunctionCallingConfig", None)
         if afc is not None:
             kwargs["automatic_function_calling"] = afc(disable=True)
+        # 2.5 Flash gasta o teto em "thinking" e corta o JSON no meio da string.
+        thinking = getattr(types, "ThinkingConfig", None)
+        if thinking is not None and _uses_thinking(model):
+            kwargs["thinking_config"] = thinking(thinking_budget=0)
         return types.GenerateContentConfig(**kwargs)
 
-    def _generate(self, prompt: str, config: types.GenerateContentConfig):
+    def _generate(self, prompt: str) -> ExtractionResult:
         models = model_chain(self._model)
         last_error: Optional[BaseException] = None
         for index, model in enumerate(models):
@@ -108,16 +109,15 @@ class FactExtractor:
                 response = self._client.models.generate_content(
                     model=model,
                     contents=prompt,
-                    config=config,
+                    config=self._content_config(model),
                 )
-                if model != self._model:
-                    logger.warning(
-                        "Gemini ok no fallback model=%s (primário=%s)",
-                        model,
-                        self._model,
-                    )
-                    self._model = model
-                return response
+                parsed = self._parse_response(response, model)
+            except _UnusableResponse as exc:
+                last_error = exc
+                if index >= len(models) - 1:
+                    raise
+                logger.warning("%s — tentando %s", exc, models[index + 1])
+                continue
             except (errors.ClientError, errors.ServerError) as exc:
                 last_error = exc
                 retryable = getattr(exc, "code", None) in _RETRYABLE_CODES
@@ -135,12 +135,62 @@ class FactExtractor:
                 )
                 if wait > 0:
                     self._sleep(wait)
+                continue
             except Exception:
                 logger.exception("Gemini generate_content falhou model=%s", model)
                 raise
+            if model != self._model:
+                logger.warning(
+                    "Gemini ok no fallback model=%s (primário=%s)",
+                    model,
+                    self._model,
+                )
+                self._model = model
+            return parsed
         assert last_error is not None
         raise last_error
+
+    def _parse_response(self, response: Any, model: str) -> ExtractionResult:
+        parsed = getattr(response, "parsed", None)
+        if isinstance(parsed, ExtractionResult):
+            return parsed
+        text = _json_text(getattr(response, "text", None) or "")
+        finish = _finish_reason(response)
+        if not text:
+            logger.error(
+                "Gemini devolveu vazio model=%s finish=%s",
+                model,
+                finish,
+            )
+            raise _UnusableResponse(f"resposta vazia model={model} finish={finish}")
+        try:
+            return ExtractionResult.model_validate_json(text)
+        except Exception as exc:
+            logger.warning(
+                "Gemini JSON inválido model=%s chars=%d finish=%s",
+                model,
+                len(text),
+                finish,
+            )
+            raise _UnusableResponse(
+                f"JSON inválido model={model} chars={len(text)} finish={finish}"
+            ) from exc
 
     @staticmethod
     def _sleep(seconds: float) -> None:
         time.sleep(seconds)
+
+
+def _json_text(text: str) -> str:
+    return _FENCE.sub("", text.strip()).strip()
+
+
+def _finish_reason(response: Any) -> Optional[str]:
+    try:
+        candidates = getattr(response, "candidates", None) or []
+        if not candidates:
+            return None
+        reason = getattr(candidates[0], "finish_reason", None)
+        return str(reason) if reason is not None else None
+    except Exception:
+        return None

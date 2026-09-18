@@ -36,7 +36,7 @@ class Settings:
     gemini_api_key: Optional[str] = None
     # 3.8-flash (preview) voltou 503 de sobrecarga em produção; 2.5 é estável.
     extractor_model: str = "gemini-2.5-flash"
-    extractor_max_output_tokens: int = 4096
+    extractor_max_output_tokens: int = 8192
     # Copilot pós-STT: uma frase. Teto baixo de propósito (não é extração).
     coach_max_output_tokens: int = 256
     # Abaixo deste valor o vínculo NÃO vira fato — vai para a fila unknown.

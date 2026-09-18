@@ -123,6 +123,21 @@ def test_400_does_not_fallback():
     assert client.models.generate_content.call_count == 1
 
 
+def test_truncated_json_tries_next_model():
+    ext, client = _extractor("gemini-2.5-flash")
+    truncated = SimpleNamespace(
+        parsed=None,
+        text='{\n  "session_summary": "o produtor pediu cotação esta semana, mas está',
+        candidates=[SimpleNamespace(finish_reason="MAX_TOKENS")],
+    )
+    client.models.generate_content.side_effect = [truncated, _ok_response("ok")]
+    result = ext.extract({}, [], _messages())
+    assert result.session_summary == "ok"
+    models = [c.kwargs["model"] for c in client.models.generate_content.call_args_list]
+    assert models[0] == "gemini-2.5-flash"
+    assert models[1] == "gemini-2.5-flash-lite"
+
+
 if __name__ == "__main__":
     test_model_chain_dedupes_primary()
     test_503_retries_stable_flash()
@@ -130,4 +145,5 @@ if __name__ == "__main__":
     test_429_retries_fallback_model()
     test_404_retries_fallback_model()
     test_400_does_not_fallback()
+    test_truncated_json_tries_next_model()
     print("gemini_client ok")
