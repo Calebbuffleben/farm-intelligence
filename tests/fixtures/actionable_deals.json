@@ -1,0 +1,54 @@
+[
+  {
+    "scenario": "preco",
+    "messages": ["PRODUTOR: Fecho o biológico X se vocês fizerem 8%."],
+    "expected": {
+      "stage": "NEGOCIACAO",
+      "blockerSubtype": "preco",
+      "mustMention": ["biológico X", "8%"],
+      "mustEscalateWhenAuthorityBelow": 8
+    }
+  },
+  {
+    "scenario": "logistica",
+    "messages": ["PRODUTOR: Preciso do herbicida Y entregue no Chapadão até sexta."],
+    "expected": {
+      "nextActionKind": "logistica",
+      "mustMention": ["herbicida Y", "Chapadão", "sexta"]
+    }
+  },
+  {
+    "scenario": "concorrente",
+    "messages": ["PRODUTOR: A marca Z me deu prazo de safra; vocês conseguem igualar?"],
+    "expected": {
+      "stage": "NEGOCIACAO",
+      "mustMention": ["marca Z", "prazo de safra"]
+    }
+  },
+  {
+    "scenario": "fechamento",
+    "messages": ["PRODUTOR: Pode separar 50 galões. Só confirme a entrega amanhã."],
+    "expected": {
+      "stage": "FECHAMENTO",
+      "mustMention": ["50 galões", "entrega", "amanhã"]
+    }
+  },
+  {
+    "scenario": "pos_venda",
+    "messages": ["PRODUTOR: O lote chegou avariado e preciso de reposição antes da aplicação."],
+    "expected": {
+      "stage": "POS_VENDA",
+      "nextActionKind": "pos_venda",
+      "mustMention": ["avariado", "reposição"]
+    }
+  },
+  {
+    "scenario": "aguardar_com_gatilho",
+    "messages": ["PRODUTOR: Vou falar com meu sócio e te respondo quinta."],
+    "expected": {
+      "nextActionKind": "aguardar",
+      "mustMention": ["sócio", "quinta"],
+      "requiresExitTrigger": true
+    }
+  }
+]

@@ -1,12 +1,9 @@
 """Esteira de análise de UMA mensagem (Fase 3).
 
-  contexto (backend) -> STT se áudio -> copilot curto (fail-open) -> extração-delta -> análise
+  contexto (backend) -> extração-delta (texto ou áudio no Gemini) -> análise
 
-Regras aplicadas aqui (espelham a Fase 0):
-- fato com farm_id abaixo de resolver_min_confidence NUNCA vira fato com
-  fazenda: o vínculo é rebaixado para a fila unknown;
-- extração incremental: só a mensagem alvo gera fatos; a sessão inteira e os
-  resumos anteriores entram como contexto (resposta à "conversa infinita").
+Áudio entra no mesmo extrator do texto: os bytes vão na chamada, sem depender
+de object storage nem de uma transcrição isolada. Sem bytes do canal, não ACK.
 """
 
 import logging
@@ -16,8 +13,8 @@ from ..backend.client import BackendClient
 from ..config.settings import Settings
 from ..extractor.coach import CopilotCoach
 from ..extractor.gemini_client import FactExtractor
-from ..stt.gemini_stt import GeminiStt
-from .payload import to_analysis_payload
+from ..extractor.schema import ExtractionResult
+from .payload import deal_quality_issues, is_unusable_brief, to_analysis_payload
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +24,6 @@ class MessagePipeline:
         self._settings = settings
         self._backend = BackendClient(settings)
         self._extractor = FactExtractor(settings)
-        self._stt = GeminiStt(settings)
         self._coach = CopilotCoach(settings)
 
     def process(self, message_id: str) -> None:
@@ -42,30 +38,27 @@ class MessagePipeline:
             logger.info("análise bloqueada por consentimento: %s", message_id)
             return
 
+        audio: Optional[bytes] = None
+        audio_mime: Optional[str] = None
         transcript: Optional[str] = message.get("transcript")
-        if message["type"] == "AUDIO" and not transcript:
-            asset = message.get("mediaAsset")
-            if not asset:
-                logger.warning("áudio sem mediaAsset — pulando %s", message_id)
-                return
-            audio, content_type = self._backend.get_media(asset["id"])
-            transcript = self._stt.transcribe(
-                audio, asset.get("contentType") or content_type
+
+        if message["type"] == "AUDIO":
+            audio, fetched_mime = self._backend.get_message_media(message_id)
+            asset = message.get("mediaAsset") or {}
+            audio_mime = asset.get("contentType") or fetched_mime
+            if not audio:
+                raise RuntimeError(f"áudio sem bytes message={message_id}")
+            logger.info(
+                "áudio na extração message=%s bytes=%d mime=%s",
+                message_id,
+                len(audio),
+                audio_mime,
             )
-            logger.info("STT ok message=%s chars=%d", message_id, len(transcript))
-
-        text = transcript or message.get("body") or ""
-        if not text.strip():
-            logger.info("mensagem sem texto analisável: %s", message_id)
-            return
-
-        coach_note: Optional[str] = None
-        coach_tone: Optional[str] = None
-        if message["type"] == "AUDIO" and transcript and transcript.strip():
-            coach = self._coach.note(transcript)
-            if coach:
-                coach_note = coach.note
-                coach_tone = coach.tone
+        else:
+            text = transcript or message.get("body") or ""
+            if not text.strip():
+                logger.info("mensagem sem texto analisável: %s", message_id)
+                return
 
         messages, target_index = self._build_session_messages(
             ctx, message_id, transcript
@@ -74,14 +67,68 @@ class MessagePipeline:
         summaries = [
             s["summary"] for s in ctx.get("previousSummaries", []) if s.get("summary")
         ]
+        previous_brief = ctx.get("previousBrief") or None
+        if is_unusable_brief(previous_brief):
+            previous_brief = None
 
-        result = self._extractor.extract(
-            carteira,
-            summaries,
-            messages,
-            target_index=target_index,
-            human_links=ctx.get("humanLinks") or [],
-            session_retrieve=ctx.get("previousSummaries") or [],
+        extract_kw: Dict[str, Any] = {
+            "target_index": target_index,
+            "human_links": ctx.get("humanLinks") or [],
+            "session_retrieve": ctx.get("previousSummaries") or [],
+            "sales_policy": ctx.get("salesPolicy") or None,
+            "previous_brief": previous_brief,
+            "audio": audio,
+            "audio_mime": audio_mime,
+        }
+
+        try:
+            result = self._extractor.extract(
+                carteira, summaries, messages, **extract_kw
+            )
+            quality_issues = deal_quality_issues(
+                result.deal, ctx.get("salesPolicy") or None
+            )
+            if quality_issues:
+                logger.warning(
+                    "deal rejeitado message=%s issues=%s — tentando reparação",
+                    message_id,
+                    ", ".join(quality_issues),
+                )
+                result = self._extractor.extract(
+                    carteira,
+                    summaries,
+                    messages,
+                    **extract_kw,
+                    repair_feedback=quality_issues,
+                )
+        except Exception:
+            if message["type"] == "AUDIO":
+                # Áudio não pode virar Card vazio. Sem ACK o Redis reentrega.
+                raise
+            logger.exception(
+                "extração falhou message=%s — grava Card de Bordo mínimo",
+                message_id,
+            )
+            result = ExtractionResult(session_summary="", facts=[], unknowns=[])
+
+        if message["type"] == "AUDIO" and not _audio_was_analyzed(result):
+            raise RuntimeError(
+                f"Gemini não analisou o áudio message={message_id}"
+            )
+
+        if (result.transcript or "").strip():
+            transcript = result.transcript.strip()
+
+        coach_note: Optional[str] = None
+        coach_tone: Optional[str] = None
+        if message["type"] == "AUDIO" and transcript:
+            coach = self._coach.note(transcript)
+            if coach:
+                coach_note = coach.note
+                coach_tone = coach.tone
+
+        source_text = (
+            transcript or message.get("body") or result.session_summary or ""
         )
         payload = to_analysis_payload(
             ctx,
@@ -90,13 +137,17 @@ class MessagePipeline:
             self._settings.resolver_min_confidence,
             coach_note=coach_note,
             coach_tone=coach_tone,
+            source_text=source_text,
+            source_sent_at=str(message.get("sentAt") or ""),
         )
         self._backend.post_analysis(message_id, payload)
         logger.info(
-            "análise publicada message=%s facts=%d unknowns=%d",
+            "análise publicada message=%s facts=%d unknowns=%d audio=%s transcript=%s",
             message_id,
             len(payload["facts"]),
             len(payload["unknowns"]),
+            bool(audio),
+            bool(transcript),
         )
 
     def _build_session_messages(
@@ -113,6 +164,8 @@ class MessagePipeline:
                 target_index = i
                 if fresh_transcript:
                     text = fresh_transcript
+                elif m.get("type") == "AUDIO":
+                    text = "[áudio]"
             messages.append(
                 {
                     "index": i,
@@ -132,6 +185,7 @@ class MessagePipeline:
                     "id": farm["id"],
                     "name": farm["name"],
                     "region": farm.get("region"),
+                    "areaHa": farm.get("areaHa"),
                     "crops": [
                         {"crop": cs["crop"], "season": cs["seasonLabel"]}
                         for cs in farm.get("cropSeasons", [])
@@ -142,3 +196,14 @@ class MessagePipeline:
                 for farm in ctx.get("farms", [])
             ],
         }
+
+
+def _audio_was_analyzed(result: ExtractionResult) -> bool:
+    """Card de Bordo de voz só vale se o Gemini leu o recado."""
+    if result.facts:
+        return True
+    if (result.transcript or "").strip() and result.deal:
+        summary = (result.deal.context_summary or "").strip()
+        if summary:
+            return True
+    return not deal_quality_issues(result.deal)

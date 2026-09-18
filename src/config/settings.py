@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
+_DEFAULT_REDIS = "redis://localhost:6379/0"
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -12,17 +14,29 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def redis_url_from_env() -> str:
+    """Mesmo Redis do backend. REDIS_PRIVATE_URL primeiro: XREADGROUP BLOCK
+    pelo proxy público da Railway (REDIS_URL / *.proxy.rlwy.net) estoura
+    timeout depois de o servidor já ter colocado a mensagem no PEL."""
+    return (
+        (os.getenv("REDIS_PRIVATE_URL") or "").strip()
+        or (os.getenv("REDIS_URL") or "").strip()
+        or _DEFAULT_REDIS
+    )
+
+
 @dataclass
 class Settings:
-    # Fila de trabalho (backend publica message_ready após mídia no storage)
-    redis_url: str = "redis://localhost:6379/0"
+    # Fila de trabalho (backend publica message_ready no ingest de TEXT/AUDIO)
+    redis_url: str = _DEFAULT_REDIS
     work_stream: str = "farm:messages:ready"
     consumer_group: str = "intelligence"
 
     # Gemini — extração de fatos + resolução de entidade (JSON mode)
     gemini_api_key: Optional[str] = None
-    extractor_model: str = "gemini-3.1-flash"
-    extractor_max_output_tokens: int = 4096
+    # 3.8-flash (preview) voltou 503 de sobrecarga em produção; 2.5 é estável.
+    extractor_model: str = "gemini-2.5-flash"
+    extractor_max_output_tokens: int = 8192
     # Copilot pós-STT: uma frase. Teto baixo de propósito (não é extração).
     coach_max_output_tokens: int = 256
     # Abaixo deste valor o vínculo NÃO vira fato — vai para a fila unknown.
@@ -40,7 +54,7 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
-            redis_url=os.getenv("REDIS_URL", cls.redis_url),
+            redis_url=redis_url_from_env(),
             work_stream=os.getenv("FARM_WORK_STREAM", cls.work_stream),
             consumer_group=os.getenv("FARM_CONSUMER_GROUP", cls.consumer_group),
             gemini_api_key=os.getenv("GEMINI_API_KEY"),
