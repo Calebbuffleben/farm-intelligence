@@ -47,12 +47,22 @@ class MessagePipeline:
         if message["type"] == "AUDIO" and not transcript:
             asset = message.get("mediaAsset")
             if not asset:
-                logger.warning("áudio sem mediaAsset — pulando %s", message_id)
-                return
+                # Sem ACK: MediaWorker ainda não subiu o ficheiro. ACK aqui
+                # enterra o áudio — kick do inbox só vê AUDIO com mediaAsset.
+                raise RuntimeError(
+                    f"áudio sem mediaAsset — espera MediaWorker message={message_id}"
+                )
             audio, content_type = self._backend.get_media(asset["id"])
             transcript = self._stt.transcribe(
                 audio, asset.get("contentType") or content_type
             )
+            if not (transcript or "").strip():
+                if not self._settings.gemini_api_key:
+                    logger.warning(
+                        "STT fail-open sem chave — pulando áudio %s", message_id
+                    )
+                    return
+                raise RuntimeError(f"STT vazio message={message_id}")
             logger.info("STT ok message=%s chars=%d", message_id, len(transcript))
 
         text = transcript or message.get("body") or ""

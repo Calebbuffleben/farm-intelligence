@@ -1,15 +1,17 @@
 """STT batch via Gemini (áudio inline → transcrição em PT-BR).
 
-Áudio de WhatsApp é OGG/Opus, curto (limite prático de 16MB da Cloud API),
-então o envio inline resolve — sem Files API no ano 1.
+Áudio de WhatsApp é OGG/Opus; a Evolution converte PTT para audio/mp4.
+Sem Files API no ano 1 — envio inline.
 """
 
 import logging
+from typing import Optional
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 from ..config.settings import Settings
+from ..extractor.gemini_client import FALLBACK_MODELS, _uses_thinking, model_chain
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +21,29 @@ _PROMPT = (
     "insumos e defensivos são esperados). Retorne SOMENTE o texto transcrito, "
     "sem comentários e sem marcações."
 )
+
+_MIME_ALIASES = {
+    "audio/ogg": "audio/ogg",
+    "audio/opus": "audio/ogg",
+    "application/ogg": "audio/ogg",
+    "audio/webm": "audio/webm",
+    "audio/mp4": "audio/mp4",
+    "audio/m4a": "audio/mp4",
+    "audio/x-m4a": "audio/mp4",
+    "audio/mpeg": "audio/mp3",
+    "audio/mp3": "audio/mp3",
+    "audio/wav": "audio/wav",
+    "audio/x-wav": "audio/wav",
+    "audio/aac": "audio/aac",
+    "application/octet-stream": "audio/ogg",
+}
+
+
+def stt_mime(mime_type: Optional[str]) -> str:
+    raw = (mime_type or "audio/ogg").split(";")[0].strip().lower()
+    if raw in _MIME_ALIASES:
+        return _MIME_ALIASES[raw]
+    return raw if raw.startswith("audio/") else "audio/ogg"
 
 
 class GeminiStt:
@@ -34,15 +59,38 @@ class GeminiStt:
         if not self._client:
             logger.warning("STT skip — sem GEMINI_API_KEY")
             return ""
-        response = self._client.models.generate_content(
-            model=self._model,
-            contents=[
-                types.Part.from_bytes(data=audio, mime_type=mime_type or "audio/ogg"),
-                _PROMPT,
-            ],
-            config=types.GenerateContentConfig(temperature=0.0),
-        )
-        text = (response.text or "").strip()
-        if not text:
-            raise RuntimeError("STT retornou transcrição vazia")
-        return text
+        mime = stt_mime(mime_type)
+        last_error: Optional[BaseException] = None
+        for model in model_chain(self._model):
+            try:
+                kwargs = {"temperature": 0.0}
+                thinking = getattr(types, "ThinkingConfig", None)
+                if thinking is not None and _uses_thinking(model):
+                    kwargs["thinking_config"] = thinking(thinking_budget=0)
+                response = self._client.models.generate_content(
+                    model=model,
+                    contents=[
+                        types.Part.from_bytes(data=audio, mime_type=mime),
+                        _PROMPT,
+                    ],
+                    config=types.GenerateContentConfig(**kwargs),
+                )
+                text = (response.text or "").strip()
+                if text:
+                    if model != self._model:
+                        logger.warning("STT ok no fallback model=%s", model)
+                        self._model = model
+                    return text
+                last_error = RuntimeError(f"STT vazio model={model}")
+                logger.warning("STT vazio model=%s mime=%s — próximo modelo", model, mime)
+            except (errors.ClientError, errors.ServerError) as exc:
+                last_error = exc
+                code = getattr(exc, "code", None)
+                if code not in {404, 429, 503}:
+                    logger.exception("STT falhou model=%s", model)
+                    raise
+                logger.warning("STT %s model=%s — próximo modelo", code, model)
+            except Exception:
+                logger.exception("STT falhou model=%s", model)
+                raise
+        raise last_error or RuntimeError("STT retornou transcrição vazia")
